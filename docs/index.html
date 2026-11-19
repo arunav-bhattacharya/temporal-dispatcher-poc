@@ -300,8 +300,16 @@ svg.fdsvg{display:block;width:100%;min-width:880px;height:auto}
 
 .fd-now{margin:0;font-size:1rem;line-height:1.5;padding:10px 14px;border-radius:10px;background:var(--band);border:1px solid var(--line);min-height:3.3em}
 .fd-now>b{color:var(--title);margin-right:4px}
-.fd-ctrls .fd-play{background:var(--accent);color:var(--on-accent);border-color:transparent;font-weight:650;min-width:6.8em}
-.fd-ctrls .fd-play[aria-pressed="true"]{background:var(--card-solid);color:var(--title);border-color:var(--accent)}
+.fd-ctrls .fd-play{background:var(--card-solid);color:var(--title);border-color:var(--accent);font-weight:650;min-width:6.8em}
+.fd-ctrls .fd-play[aria-pressed="true"]{background:var(--tint)}
+.fd-ctrls{display:flex;flex-wrap:wrap;gap:10px 24px;align-items:center}
+.fd-group{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.fd-group .lbl2{font-size:.74rem;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;margin-right:2px}
+.fd-stepno{font-size:.86rem;font-variant-numeric:tabular-nums;color:var(--title);font-weight:600;min-width:7.2em;text-align:center}
+.fd-ctrls .fd-next{background:var(--accent);color:var(--on-accent);border-color:transparent;font-weight:650}
+.fd-ctrls button:disabled{opacity:.4;cursor:default}
+.fd-now .stepno{display:inline-block;font-size:.76rem;font-weight:700;color:var(--accent);background:var(--tint);border-radius:99px;padding:1px 9px;margin-right:8px;vertical-align:1px}
+.wfrow.busy .rowbg{stroke:var(--accent);stroke-width:1.8;fill:var(--tint)}
 .fd-speed{display:inline-flex;border:1px solid var(--line);border-radius:99px;padding:2px;background:var(--card-solid)}
 .fd-ctrls .fd-speed button{border:0;padding:4px 11px;background:transparent}
 .fd-ctrls .fd-speed button[aria-pressed="true"]{background:var(--tint);color:var(--title);font-weight:600}
@@ -363,7 +371,7 @@ fun dispatchEverything() {
   <h2><span class="hnum">2</span>Version 1: a schedule and a polite loop</h2>
   <div class="prose">
     <p>Each event type gets its own Temporal Schedule. Every 30 seconds to 5 minutes, depending on the type, it starts a <code>DispatcherWorkflow</code>, and that workflow runs a single activity. This is Option 1.</p>
-    <p>Before we read any code, let's watch it run. In the picture below, payments arrive over HTTP on the left and wait in the table. Each schedule counts down to its next tick and wakes the dispatcher, which claims and starts. The business workflow on the right does the real work and marks the row done. Press Play: payments arrive slowly, and the line above the picture says what is happening at each moment. Then try pausing one schedule, say Inbound, and watch its payments pile up while the others keep moving.</p>
+    <p>Before we read any code, let's watch it run. In the picture below, payments arrive over HTTP on the left and wait in the table. Each schedule counts down to its next tick and wakes the dispatcher, which claims and starts. The business workflow on the right does the real work and marks the row done. Press Next to follow a single payment one step at a time (Prev goes back), or Play to watch live traffic. The line above the picture always says what is happening. Then try pausing one schedule, say Inbound, and watch its payments pile up while the others keep moving.</p>
   </div>
   <div class="card fd" id="fd1"></div>
   <div class="prose"><p>Notice how the dots leave the dispatcher one by one, and how a payment that lands just after a tick has to wait for the next one. Inside the dispatcher box is the loop below.</p></div>
@@ -696,20 +704,30 @@ function FlowDiagram(root,mode){
   root.innerHTML=`
     <div class="fd-top">
       <div><div class="olabel">${o2?'Option 2':'Option 1'}</div><h3>${o2?'Temporal Schedules with Kotlin Flow':'Temporal Schedules with a plain loop'}</h3></div>
-      <div class="fd-ctrls">
+    </div>
+    <div class="fd-ctrls">
+      <div class="fd-group" role="group" aria-label="Step by step">
+        <span class="lbl2">Step by step</span>
+        <button type="button" data-act="prev" disabled>◀ Prev</button>
+        <span class="fd-stepno">One payment</span>
+        <button type="button" class="fd-next" data-act="next">Next ▶</button>
+      </div>
+      <div class="fd-group" role="group" aria-label="Live traffic">
+        <span class="lbl2">Live</span>
         <button type="button" class="fd-play" data-act="play" aria-pressed="false">▶ Play</button>
         <span class="fd-speed" role="group" aria-label="Speed"><button type="button" data-speed="0.45" aria-pressed="true">Slow</button><button type="button" data-speed="1" aria-pressed="false">Normal</button></span>
         <button type="button" data-act="traffic" aria-pressed="true">Steady traffic</button>
-        <button type="button" data-act="one">Send 1 payment</button>
+        <button type="button" data-act="one">Send 1</button>
         <button type="button" data-act="burst">Send 20 inbound</button>
         <button type="button" data-act="reset">Reset</button>
       </div>
     </div>
-    <p class="fd-hint">Each dot is one payment. Follow a dot from left to right through steps 1 to 5. Click a schedule (step 3) to pause it, and click any box for details. Tip: switch off steady traffic and send one payment at a time.</p>
-    <p class="fd-now" aria-live="polite"><b>Now:</b> <span>Press Play to start.</span></p>
+    <p class="fd-hint">Each dot is one payment, moving left to right through stages 1 to 5. Use <b>Next</b> and <b>Prev</b> to follow one payment a step at a time, or <b>Play</b> to watch live traffic. In live mode, click a schedule (stage 3) to pause it. Click any box for details.</p>
+    <p class="fd-now" aria-live="polite"><b>Now:</b> <span>Press Next to follow one payment step by step, or Play to watch live traffic.</span></p>
     <div class="dg-scroll"><svg class="fdsvg" viewBox="0 0 1060 490" role="img" aria-label="${o2?'Option 2':'Option 1'} architecture: HTTP API, payment_events table, ${o2?'doorbell, ':''}Temporal Schedules, DispatcherWorkflow and business workflows"></svg></div>
     <div class="fd-info"><div class="panel"><span class="kind">Live log</span><ul class="fd-log"></ul></div><div class="panel fd-sel"></div></div>`;
-  const svg=root.querySelector('svg'),logEl=root.querySelector('.fd-log'),selEl=root.querySelector('.fd-sel'),nowEl=root.querySelector('.fd-now span'),playBtn=root.querySelector('.fd-play');
+  const svg=root.querySelector('svg'),logEl=root.querySelector('.fd-log'),selEl=root.querySelector('.fd-sel'),nowEl=root.querySelector('.fd-now span'),playBtn=root.querySelector('.fd-play'),
+    prevBtn=root.querySelector('[data-act="prev"]'),nextBtn=root.querySelector('[data-act="next"]'),stepLbl=root.querySelector('.fd-stepno'),logKind=root.querySelector('.fd-info .kind');
   const defs=el('defs',{},svg);
   [['ah','var(--dg-wire)'],['ah-on','var(--accent)']].forEach(([n,c])=>{const mk=el('marker',{id:`${uid}-${n}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'},defs);el('path',{d:'M0,0 L10,5 L0,10 z',style:'fill:'+c},mk)});
   const gW=el('g',{},svg),gL=el('g',{},svg),gB=el('g',{},svg),gD=el('g',{},svg);
@@ -748,9 +766,9 @@ function FlowDiagram(root,mode){
   const stepEls=STEPS.map((s,i)=>{const y=114+i*30;const hl=el('rect',{x:644,y:y-15,width:164,height:22,rx:6,class:'step-hl'},g);tx(g,652,y,'t',s);return hl});
   const status=tx(g,652,276,'s','idle');
   g=box('wf',886,72,158,218,'5 · Business workflows');
-  const wfEls=FT.map((t,i)=>{const rg=el('g',{},g);el('rect',{x:894,y:rowTop(i),width:142,height:30,rx:7,class:'rowbg'},rg);
+  const wfRows=FT.map((t,i)=>{const rg=el('g',{class:'wfrow'},g);el('rect',{x:894,y:rowTop(i),width:142,height:30,rx:7,class:'rowbg'},rg);
     el('circle',{cx:905,cy:rowTop(i)+11,r:4,style:`fill:${t.col}`},rg);tx(rg,915,rowTop(i)+15,'t',t.s);
-    return tx(rg,915,rowTop(i)+26,'s2','')});
+    return {rg,txt:tx(rg,915,rowTop(i)+26,'s2','')}});
   g=box('sch',606,340,438,140,'3 · Temporal Schedules');tx(g,1032,357.5,'s2','one per event type','end');
   const chipEls=FT.map((t,i)=>{const [x,y]=chipXY(i);const cg=el('g',{class:'chip-s',tabindex:0,role:'button','data-chip':i,'aria-label':`Pause or resume the ${t.s} schedule`},gB);
     el('rect',{x,y,width:132,height:40,rx:8,class:'cb'},cg);el('circle',{cx:x+11,cy:y+13,r:4,style:`fill:${t.col}`},cg);
@@ -766,9 +784,13 @@ function FlowDiagram(root,mode){
   // ---- state ----
   const S={wait:[],run:[],done:[],paused:[],cd:[],acc:[],lastTrig:[],pend:[]};
   let runs=[],cur=null,traffic=true,simT=0,dots=[],retCool=0,sel='api',playing=false,speed=.45,nowPrio=0,nowAt=-99,oneIdx=0;
-  function reset(){FT.forEach((t,i)=>{S.wait[i]=SEED_WAIT[i];S.run[i]=[];S.done[i]=SEED_DONE[i];S.paused[i]=false;S.cd[i]=t.iv*(.35+.12*i);S.acc[i]=0;S.lastTrig[i]=-99;S.pend[i]=false});
-    runs=[];cur=null;dots.forEach(d=>{d.el.remove();lit(d.keys,-1)});dots=[];simT=0;logEl.innerHTML='';nowPrio=0;nowAt=-99;
-    log('Payments arrive over HTTP and wait as NEW until their dispatcher runs.');say(playing?'Waiting for the next payment.':'Press Play to start.',0);render();setStep(-1)}
+  let view='live',stepIdx=-1,token=0;const scr={bar:[]};
+  function clearDots(){dots.forEach(d=>{d.el.remove();if(d.on)lit(d.keys,-1)});dots=[]}
+  function reset(){view='live';stepIdx=-1;token++;
+    FT.forEach((t,i)=>{S.wait[i]=SEED_WAIT[i];S.run[i]=[];S.done[i]=SEED_DONE[i];S.paused[i]=false;S.cd[i]=t.iv*(.35+.12*i);S.acc[i]=0;S.lastTrig[i]=-99;S.pend[i]=false});
+    runs=[];cur=null;clearDots();simT=0;logEl.innerHTML='';nowPrio=0;nowAt=-99;wfRows.forEach(w=>w.rg.classList.remove('busy'));status.textContent='idle';
+    log('Payments arrive over HTTP and wait as NEW until their dispatcher runs.');
+    say(playing?'Waiting for the next payment.':'Press Next to follow one payment step by step, or Play to watch live traffic.',0);render();setStep(-1);updateStepper()}
   function hhmmss(){const s=Math.floor(9*3600+120+simT*10);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(v=>String(v).padStart(2,'0')).join(':')}
   function log(h){const li=document.createElement('li');li.innerHTML=`<time>${hhmmss()}</time>${h}`;logEl.prepend(li);while(logEl.children.length>5)logEl.lastChild.remove()}
   /** One plain-language line about what is happening; dispatcher news outranks arrivals for a moment. */
@@ -776,8 +798,9 @@ function FlowDiagram(root,mode){
   function render(){
     FT.forEach((t,i)=>{const w=S.wait[i];rowEls[i].n.textContent=w+' waiting';rowEls[i].fill.setAttribute('width',Math.min(1,w/30)*164);
       rowEls[i].rg.classList.toggle('held',S.paused[i]&&w>0);
-      wfEls[i].textContent=`${S.run[i].length} running · ${S.done[i]} done`;
-      chipEls[i].cg.classList.toggle('paused',S.paused[i]);chipEls[i].st.textContent=S.paused[i]?'Paused':'running'});
+      wfRows[i].txt.textContent=`${S.run[i].length} running · ${S.done[i]} done`;
+      chipEls[i].cg.classList.toggle('paused',S.paused[i]);chipEls[i].st.textContent=S.paused[i]?'Paused':'running';
+      if(view==='script')chipEls[i].bar.setAttribute('width',(scr.bar[i]||0)*110)});
     clock.textContent=hhmmss()}
   function setStep(k){stepEls.forEach((h,i)=>h.classList.toggle('on',i===k))}
   function flash(elm,cls,ms){if(!elm)return;elm.classList.add(cls);setTimeout(()=>elm.classList.remove(cls),ms)}
@@ -856,23 +879,92 @@ function FlowDiagram(root,mode){
     log(S.paused[i]?`Schedule <b>dispatch-${t.k}</b> paused (note: INC-4711). ${t.s} payments will wait; the others keep flowing.`:`Schedule <b>dispatch-${t.k}</b> resumed. The next ${o2&&t.door?'ring or ':''}tick drains the backlog.`);
     say(S.paused[i]?`The <b>${t.s}</b> schedule is paused. New ${t.s} payments wait in the table; every other type keeps flowing.`:`The <b>${t.s}</b> schedule is running again. Its next tick drains the waiting rows.`,5);render()}
   function setPlaying(p){playing=p;playBtn.setAttribute('aria-pressed',p);playBtn.textContent=p?'❚❚ Pause':'▶ Play';if(p&&simT===0)say('Waiting for the next payment.',0)}
-  svg.addEventListener('click',e=>{const c=e.target.closest('[data-chip]');if(c){togglePause(+c.getAttribute('data-chip'));return}
+
+  // ---- step by step: one scripted payment journey, one step per click ----
+  // Every step is replayed from a clean state, so Prev is exact: state(k) = steps 0..k-1 applied instantly, then step k animated.
+  const P={toApi:[[126,150],[241,150]],apiToRow:i=>[[241,150],[386,150],[394,rowC(i)]],arrive:i=>[[126,150],[386,150],[394,rowC(i)]],run:W.run,
+    claim:i=>[[556,rowC(i)],[566,130],[636,130]],start:i=>[[816,180],[886,180],[894,rowTop(i)+15]],started:W.started,done:W.done,
+    notify:[[476,290],[476,350]],trig:i=>{const [x,y]=chipXY(i);return [[536,386],[606,386],[x+66,y+20]]}};
+  const Dt=(p,col,keys,delay,dur)=>({p,col,keys,delay:delay||0,dur:dur||1.2});
+  function buildScript(){
+    const IN=0,PO=3,ci=FT[IN].col,cp=FT[PO].col,ac='var(--accent)',L=[],add=o=>L.push(o);
+    add({dt:1,short:'Payment sent',say:`A customer's banking app sends an inbound payment: <code>POST /events/INBOUND_PAYMENT</code>, with the payment as JSON.`,dots:[Dt(P.toApi,ci,['post'])]});
+    add({dt:1,short:'Stored as NEW',say:`Stages 1 and 2: the HTTP API checks the JSON against the Inbound payload class, stores one row with status <b>NEW</b> in <code>payment_events</code>, and replies <code>202 Accepted</code>.`,dots:[Dt(P.apiToRow(IN),ci,['insert'])],apply:()=>{S.wait[IN]++}});
+    if(!o2){
+      add({dt:55,short:'Waiting for the tick',bar:[IN,.97],say:`Nothing happens yet. In Option 1 the payment waits for the Inbound schedule's next tick. Watch the thin bar under the Inbound schedule: it fills up as the minute passes.`});
+      add({dt:2,short:'Schedule fires',chip:IN,bar:[IN,0],say:`Stage 3: the Inbound schedule fires on its interval and starts a <code>DispatcherWorkflow</code> run for INBOUND_PAYMENT.`,dots:[Dt(P.run,ac,['run'],0,.9)]});
+    }else{
+      add({dt:1,short:'NOTIFY',ring:true,say:`The insert fires a Postgres trigger: <code>pg_notify('payment_events', 'INBOUND_PAYMENT')</code>. The doorbell, a Kotlin <code>Flow</code> over <code>LISTEN</code>, receives it.`,dots:[Dt(P.notify,ac,['notify'],0,.9)]});
+      add({dt:1,short:'Doorbell triggers',chip:IN,say:`The doorbell's flow conflates rings (many inserts, one trigger) and calls <code>trigger(BUFFER_ONE)</code> on the Inbound schedule right away. No waiting for the tick.`,dots:[Dt(P.trig(IN),ac,['trigger'],0,1)]});
+      add({dt:1,short:'Schedule starts a run',say:`Stage 3: the triggered schedule starts a <code>DispatcherWorkflow</code> run for INBOUND_PAYMENT, seconds after the insert.`,dots:[Dt(P.run,ac,['run'],0,.9)]});
+    }
+    add({dt:1,short:'4a · read limits',dsp:0,status:'Inbound · reading limits',say:`Stage 4a: the dispatcher reads this type's limits from <code>dispatch_config</code>: batch size, in-flight cap and starts per second.`});
+    add({dt:1,short:'4b · check capacity',dsp:1,status:'Inbound · checking capacity',say:`Stage 4b: it checks capacity. The in-flight cap is 2,000 and no Inbound workflows are open, so there is plenty of room.`});
+    add({dt:1,short:'4c · claim the row',dsp:2,status:'Inbound · claimed 1',say:`Stage 4c: it claims the row with <code>FOR UPDATE SKIP LOCKED</code> and marks it CLAIMED with a lease. No other dispatcher run can take it now.`,dots:[Dt(P.claim(IN),ci,['claim'])],apply:()=>{S.wait[IN]--}});
+    add({dt:1,short:'4d · start the workflow',dsp:3,status:'Inbound · starting',say:`Stage 4d: it starts <code>InboundPaymentWorkflow</code> with the ID <code>INBOUND_PAYMENT-1042</code>. `+(o2?`Option 2 can start up to 8 at once with <code>flatMapMerge(8)</code>; here there is only one.`:`Option 1 starts workflows one at a time.`),dots:[Dt(P.start(IN),ci,['start'])],apply:()=>{S.run[IN].push(1)}});
+    add({dt:1,short:'4e · mark STARTED',dsp:4,status:'Inbound · started 1 of 1',say:`Stage 4e: it marks the row STARTED. This dispatcher run is finished.`,dots:[Dt(P.started,ac,['started'],0,.9)]});
+    add({dt:4,short:'Workflow runs',busy:IN,say:`Stage 5: <code>InboundPaymentWorkflow</code> does the real work on its own task queue: sanctions screening, match the account, credit it, notify the customer.`});
+    add({dt:1,short:'Marked DONE',busy:IN,say:`The workflow's last activity marks the row <b>DONE</b> in <code>payment_events</code>. That's one payment, start to finish.`,dots:[Dt(P.done,ci,['done'],0,1.4)],apply:()=>{S.run[IN].pop();S.done[IN]++}});
+    add({dt:5,short:'Inbound paused',pre:()=>{S.paused[IN]=true},say:`Now an incident. Ops pause the Inbound schedule with a note (INC-4711). Running workflows would finish; only new dispatching for Inbound stops.`});
+    add({dt:2,short:'Two more arrive',say:`Two more payments arrive over HTTP, one Inbound and one Posted. Both are stored as NEW.`,dots:[Dt(P.arrive(IN),ci,['post','insert'],0,1.4),Dt(P.arrive(PO),cp,['post','insert'],.5,1.4)],apply:()=>{S.wait[IN]++;S.wait[PO]++}});
+    if(o2)add({dt:1,short:'Doorbell skips Inbound',ring:true,say:`The doorbell hears the Inbound insert, sees that the Inbound schedule is paused, and does nothing.`,dots:[Dt(P.notify,ac,['notify'],0,.9)]});
+    add({dt:20,short:'Posted keeps flowing',chip:PO,dsp:3,status:'Posted · started 1 of 1',say:`The Posted schedule fires as usual. Its dispatcher claims the Posted row and starts <code>PostedPaymentWorkflow</code>. Pausing one schedule doesn't affect the others.`,
+      dots:[Dt(P.run,ac,['run'],0,.8),Dt(P.claim(PO),cp,['claim'],.7,1),Dt(P.start(PO),cp,['start'],1.6,1)],apply:()=>{S.wait[PO]--;S.run[PO].push(1)}});
+    add({dt:30,short:'Inbound stays NEW',bar:[IN,.6],say:`The Inbound schedule is paused, so its countdown is frozen and no dispatcher runs for it. The Inbound payment stays <b>NEW</b> (outlined in red).`});
+    add({dt:2,short:'Posted DONE',busy:PO,say:`The Posted workflow finishes and marks its row DONE.`,dots:[Dt(P.done,cp,['done'],0,1.4)],apply:()=>{S.run[PO].pop();S.done[PO]++}});
+    add({dt:20,short:'Inbound resumed',chip:IN,dsp:3,status:'Inbound · started 1 of 1',bar:[IN,0],pre:()=>{S.paused[IN]=false},say:`Ops resume the Inbound schedule. At its next tick the dispatcher claims the waiting row and starts its workflow, just like the first one.`,
+      dots:[Dt(P.run,ac,['run'],0,.8),Dt(P.claim(IN),ci,['claim'],.7,1),Dt(P.start(IN),ci,['start'],1.6,1)],apply:()=>{S.wait[IN]--;S.run[IN].push(1)}});
+    add({dt:4,short:'All DONE',busy:IN,say:`It finishes and marks its row DONE. That's the whole story. Press <b>Play</b> to watch live traffic, or <b>Prev</b> to step back.`,dots:[Dt(P.done,ci,['done'],0,1.4)],apply:()=>{S.run[IN].pop();S.done[IN]++}});
+    return L}
+  const SCRIPT=buildScript();
+  function applyStep(st){st.pre&&st.pre();st.apply&&st.apply();if(st.bar)scr.bar[st.bar[0]]=st.bar[1]}
+  function updateStepper(){const n=SCRIPT.length;
+    stepLbl.textContent=view==='script'?`Step ${stepIdx+1} of ${n}`:'One payment';logKind.textContent=view==='script'?'Steps so far':'Live log';
+    prevBtn.disabled=view!=='script'||stepIdx<=0;nextBtn.disabled=view==='script'&&stepIdx>=n-1}
+  function goTo(k){
+    setPlaying(false);view='script';stepIdx=k;const tk=++token;
+    clearDots();runs=[];cur=null;
+    FT.forEach((t,i)=>{S.wait[i]=0;S.run[i]=[];S.done[i]=0;S.paused[i]=false;scr.bar[i]=[.35,.5,.2,.7,.1][i]});
+    let secs=0;for(let j=0;j<k;j++){applyStep(SCRIPT[j]);secs+=SCRIPT[j].dt}
+    const st=SCRIPT[k];secs+=st.dt;simT=secs/10;
+    st.pre&&st.pre();if(st.bar)scr.bar[st.bar[0]]=st.bar[1];
+    setStep(st.dsp===undefined?-1:st.dsp);status.textContent=st.status||'idle';
+    wfRows.forEach((w,i)=>w.rg.classList.toggle('busy',st.busy===i));
+    if(st.chip!==undefined)flash(chipEls[st.chip].cg,'tick',900);
+    if(st.ring)flash(ringEl,'on',700);
+    nowEl.innerHTML=`<span class="stepno">Step ${k+1} of ${SCRIPT.length}</span>${st.say}`;
+    logEl.innerHTML='';SCRIPT.slice(0,k+1).slice(-5).forEach((s,j,arr)=>{const li=document.createElement('li');li.innerHTML=`<time>${k+1-arr.length+j+1}.</time>${s.short}`;logEl.prepend(li)});
+    const ds=st.dots||[];
+    if(!ds.length){st.apply&&st.apply()}
+    else{const lastEnd=Math.max(...ds.map(d=>d.delay+d.dur));let applied=false;
+      const fin=()=>{if(tk===token&&!applied){applied=true;st.apply&&st.apply();render()}};
+      ds.forEach(d=>dot(d.p,d.col,d.dur,d.delay+d.dur===lastEnd?fin:null,d.delay,6,d.keys));
+      setTimeout(fin,(lastEnd+.4)*1000)} // fallback when animation frames are paused (background tab)
+    render();updateStepper()}
+
+  svg.addEventListener('click',e=>{const c=e.target.closest('[data-chip]');
+    if(c){if(view==='script'){nowEl.innerHTML='Schedules can be paused in live mode. Press <b>Play</b>, then click a schedule.';return}togglePause(+c.getAttribute('data-chip'));return}
     const b=e.target.closest('[data-id]');if(b)select(b.getAttribute('data-id'))});
   svg.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const c=e.target.closest('[data-chip]'),b=e.target.closest('[data-id]');
-    if(c||b){e.preventDefault();if(c)togglePause(+c.getAttribute('data-chip'));else select(b.getAttribute('data-id'))}});
-  root.querySelector('.fd-ctrls').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+    if(c||b){e.preventDefault();if(c){if(view!=='script')togglePause(+c.getAttribute('data-chip'))}else select(b.getAttribute('data-id'))}});
+  root.querySelector('.fd-ctrls').addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.disabled)return;
     if(b.dataset.speed){speed=+b.dataset.speed;root.querySelectorAll('[data-speed]').forEach(x=>x.setAttribute('aria-pressed',x===b));return}
     const a=b.dataset.act;
-    if(a==='play')setPlaying(!playing);
-    if(a==='one'){setPlaying(true);const i=oneIdx++%FT.length;arrive(i);log(`One <b>${FT[i].s}</b> payment sent via <code>POST /events/${FT[i].k}</code>.`)}
-    if(a==='burst'){setPlaying(true);for(let k=0;k<20;k++)arrive(0,k*.18);say('20 <b>Inbound</b> payments arrive over HTTP, one after another.',2);log('20 inbound payments arrived via <code>POST /events/INBOUND_PAYMENT</code>.')}
+    if(a==='next'){goTo(view==='script'?Math.min(stepIdx+1,SCRIPT.length-1):0);return}
+    if(a==='prev'){if(view==='script')goTo(Math.max(stepIdx-1,0));return}
+    const leaveScript=()=>{if(view==='script')reset()};
+    if(a==='play'){leaveScript();setPlaying(!playing)}
+    if(a==='one'){leaveScript();setPlaying(true);const i=oneIdx++%FT.length;arrive(i);log(`One <b>${FT[i].s}</b> payment sent via <code>POST /events/${FT[i].k}</code>.`)}
+    if(a==='burst'){leaveScript();setPlaying(true);for(let k=0;k<20;k++)arrive(0,k*.18);say('20 <b>Inbound</b> payments arrive over HTTP, one after another.',2);log('20 inbound payments arrived via <code>POST /events/INBOUND_PAYMENT</code>.')}
     if(a==='traffic'){traffic=!traffic;b.setAttribute('aria-pressed',traffic)}
     if(a==='reset'){setPlaying(false);reset()}});
 
   reset();select('api');
   let last=performance.now(),visible=true;
   if('IntersectionObserver' in window)new IntersectionObserver(es=>{visible=es[0].isIntersecting},{threshold:.05}).observe(svg);
-  function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;if(playing&&visible&&!document.hidden)step(dt*speed);requestAnimationFrame(frame)}
+  function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;
+    if(view==='script'){if(!document.hidden)moveDots(dt)}else if(playing&&visible&&!document.hidden)step(dt*speed);
+    requestAnimationFrame(frame)}
   requestAnimationFrame(frame);
 }
 FlowDiagram(document.getElementById('fd1'),'opt1');
