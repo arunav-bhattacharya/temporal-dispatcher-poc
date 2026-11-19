@@ -48,13 +48,15 @@ In both options the in-flight cap bounds open workflows: `starts/s ≤ maxInflig
 
 ## Event types
 
-| Event | Schedule | Doorbell (option 2) | Workflow | What it does |
-|---|---|---|---|---|
-| `INBOUND_PAYMENT` | 1m | on | `InboundPaymentWorkflow` | Sanctions screening → match the account → credit → notify. A watchlist hit fails the event. |
-| `PAYMENT_RETURNED` | 1m | on | `ReturnedPaymentWorkflow` | Reverse the original posting. R01/R09 incur a return fee; R02/R03/R04 block ACH debits. |
-| `PAYMENT_SCHEDULED` | 1m | off | `ScheduledPaymentWorkflow` | Validate → durable timer until `scheduledFor` → funds check → submit. The row becomes claimable 5 min before it is due. |
-| `PAYMENT_POSTED` | 30s | off | `PostedPaymentWorkflow` | Ledger projection → available balance → notify. |
-| `PAYMENT_SETTLED` | 5m | off | `SettledPaymentWorkflow` | Reconcile the fee → release the hold → close the payment. |
+| Event | Priority | Schedule | Doorbell (option 2) | Workflow | What it does |
+|---|---|---|---|---|---|
+| `INBOUND_PAYMENT` | 1 | 1m | on | `InboundPaymentWorkflow` | Sanctions screening → match the account → credit → notify. A watchlist hit fails the event. |
+| `PAYMENT_RETURNED` | 2 | 1m | on | `ReturnedPaymentWorkflow` | Reverse the original posting. R01/R09 incur a return fee; R02/R03/R04 block ACH debits. |
+| `PAYMENT_SCHEDULED` | 1 | 1m | off | `ScheduledPaymentWorkflow` | Validate → durable timer until `scheduledFor` → funds check → submit. The row becomes claimable 5 min before it is due. |
+| `PAYMENT_POSTED` | 2 | 30s | off | `PostedPaymentWorkflow` | Ledger projection → available balance → notify. |
+| `PAYMENT_SETTLED` | 2 | 5m | off | `SettledPaymentWorkflow` | Reconcile the fee → release the hold → close the payment. |
+
+Priority 1 types are paused last when Temporal is under load (by ops today, by the future governor later); priority 2 types go first.
 
 Payload classes are in [`Payloads.kt`](src/main/kotlin/com/payments/dispatch/events/Payloads.kt). To see one, call `curl localhost:8080/events/sample/INBOUND_PAYMENT`:
 

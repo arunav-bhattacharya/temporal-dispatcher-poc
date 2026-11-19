@@ -21,6 +21,7 @@ dispatch:
     max-concurrent-workflow-tasks: 50
 
   # Static registry: which event types exist and how often their dispatcher runs.
+  # Priority 1 (inbound, scheduled) is paused last by the future load governor; priority 2 goes first.
   # Runtime limits (batch size, in-flight cap, starts/s, parallelism) live in the dispatch_config table.
   events:
     INBOUND_PAYMENT:
@@ -30,11 +31,11 @@ dispatch:
     PAYMENT_RETURNED:
       interval: 1m
       doorbell: true
-      priority: 1
+      priority: 2
     PAYMENT_SCHEDULED:
       interval: 1m
       doorbell: false
-      priority: 2
+      priority: 1
     PAYMENT_POSTED:
       interval: 30s
       doorbell: false
@@ -42,7 +43,7 @@ dispatch:
     PAYMENT_SETTLED:
       interval: 5m
       doorbell: false
-      priority: 3
+      priority: 2
 
   # Option 2 only: LISTEN/NOTIFY wake-up signal.
   doorbell:
