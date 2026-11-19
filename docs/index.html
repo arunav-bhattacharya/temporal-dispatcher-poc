@@ -297,6 +297,15 @@ svg.fdsvg{display:block;width:100%;min-width:880px;height:auto}
 @media (max-width:760px){.fd-info{grid-template-columns:1fr}}
 .fd-log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:.88rem;min-height:8.5em}
 .fd-log time{color:var(--mut);font-variant-numeric:tabular-nums;margin-right:8px}
+
+.fd-now{margin:0;font-size:1rem;line-height:1.5;padding:10px 14px;border-radius:10px;background:var(--band);border:1px solid var(--line);min-height:3.3em}
+.fd-now>b{color:var(--title);margin-right:4px}
+.fd-ctrls .fd-play{background:var(--accent);color:var(--on-accent);border-color:transparent;font-weight:650;min-width:6.8em}
+.fd-ctrls .fd-play[aria-pressed="true"]{background:var(--card-solid);color:var(--title);border-color:var(--accent)}
+.fd-speed{display:inline-flex;border:1px solid var(--line);border-radius:99px;padding:2px;background:var(--card-solid)}
+.fd-ctrls .fd-speed button{border:0;padding:4px 11px;background:transparent}
+.fd-ctrls .fd-speed button[aria-pressed="true"]{background:var(--tint);color:var(--title);font-weight:600}
+.fdsvg .wire.live{stroke:var(--accent);stroke-width:2.4}
 </style>
 </head>
 <body>
@@ -354,7 +363,7 @@ fun dispatchEverything() {
   <h2><span class="hnum">2</span>Version 1: a schedule and a polite loop</h2>
   <div class="prose">
     <p>Each event type gets its own Temporal Schedule. Every 30 seconds to 5 minutes, depending on the type, it starts a <code>DispatcherWorkflow</code>, and that workflow runs a single activity. This is Option 1.</p>
-    <p>Before we read any code, let's watch it run. In the picture below, payments arrive over HTTP on the left and wait in the table. Each schedule counts down to its next tick and wakes the dispatcher, which claims and starts. The business workflow on the right does the real work and marks the row done. Try pausing one schedule, say Inbound, and watch its payments pile up while the others keep moving.</p>
+    <p>Before we read any code, let's watch it run. In the picture below, payments arrive over HTTP on the left and wait in the table. Each schedule counts down to its next tick and wakes the dispatcher, which claims and starts. The business workflow on the right does the real work and marks the row done. Press Play: payments arrive slowly, and the line above the picture says what is happening at each moment. Then try pausing one schedule, say Inbound, and watch its payments pile up while the others keep moving.</p>
   </div>
   <div class="card fd" id="fd1"></div>
   <div class="prose"><p>Notice how the dots leave the dispatcher one by one, and how a payment that lands just after a tick has to wait for the next one. Inside the dispatcher box is the loop below.</p></div>
@@ -385,7 +394,7 @@ while (clock.instant().isBefore(deadline)) {
   <h2><span class="hnum">3</span>Version 2: a doorbell and a Kotlin Flow</h2>
   <div class="prose">
     <p>Option 2 keeps everything we just built: the schedules, the claim, the cap and the token bucket. It adds two pieces, and both are plain Kotlin Flow from <code>kotlinx.coroutines</code>. No other reactive library is involved.</p>
-    <p>Here is the same picture with those two pieces in place. Keep an eye on the doorbell at the bottom: when inbound or returned payments land, it rings, and their dispatcher starts within moments instead of waiting for the tick. Press "Send 20 inbound payments" and compare the two diagrams. The dispatcher here starts them eight at a time. Pausing still works the same way, and the doorbell respects it.</p>
+    <p>Here is the same picture with those two pieces in place. Keep an eye on the doorbell at the bottom: when inbound or returned payments land, it rings, and their dispatcher starts within moments instead of waiting for the tick. Press "Send 20 inbound" in both diagrams and compare them. The dispatcher here starts them eight at a time. Pausing still works the same way, and the doorbell respects it.</p>
   </div>
   <div class="card fd" id="fd2"></div>
   <div class="prose">
@@ -667,18 +676,19 @@ function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.set
 function tx(p,x,y,c,s,anchor){const t=el('text',{x,y,class:c},p);if(anchor)t.setAttribute('text-anchor',anchor);t.textContent=s;return t}
 const REDUCED=!!(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches);
 const FT=[
- {k:'INBOUND_PAYMENT',s:'Inbound',wf:'InboundPaymentWorkflow',iv:6,lab:'every 1m',door:true,rate:.9,dur:2.6,col:'var(--blue)',steps:'screen → match account → credit → notify',
+ {k:'INBOUND_PAYMENT',s:'Inbound',wf:'InboundPaymentWorkflow',iv:6,lab:'every 1m',door:true,rate:.22,dur:5,col:'var(--blue)',steps:'screen → match account → credit → notify',
   payload:'inboundId, rail, amount, currency, originator { name, accountNumber, bankBic }, beneficiaryAccountId, remittanceInfo, referenceNumber, receivedAt'},
- {k:'PAYMENT_RETURNED',s:'Returned',wf:'ReturnedPaymentWorkflow',iv:6,lab:'every 1m',door:true,rate:.3,dur:2,col:'var(--coral)',steps:'reverse posting → fee or block → notify',
+ {k:'PAYMENT_RETURNED',s:'Returned',wf:'ReturnedPaymentWorkflow',iv:6,lab:'every 1m',door:true,rate:.07,dur:4,col:'var(--coral)',steps:'reverse posting → fee or block → notify',
   payload:'paymentId, originalTraceNumber, returnCode, returnReason, amount, currency, accountId, rail, returnedAt'},
- {k:'PAYMENT_SCHEDULED',s:'Scheduled',wf:'ScheduledPaymentWorkflow',iv:6,lab:'every 1m',door:false,rate:.35,dur:3.6,col:'var(--violet)',steps:'validate → wait for the due date → funds check → submit',
+ {k:'PAYMENT_SCHEDULED',s:'Scheduled',wf:'ScheduledPaymentWorkflow',iv:6,lab:'every 1m',door:false,rate:.08,dur:7,col:'var(--violet)',steps:'validate → wait for the due date → funds check → submit',
   payload:'paymentId, debtorAccountId, creditor { name, accountNumber, routingNumber }, amount, currency, rail, scheduledFor, frequency, memo, initiatedBy, idempotencyKey'},
- {k:'PAYMENT_POSTED',s:'Posted',wf:'PostedPaymentWorkflow',iv:3,lab:'every 30s',door:false,rate:.8,dur:1.4,col:'var(--green)',steps:'ledger entry → available balance → notify',
+ {k:'PAYMENT_POSTED',s:'Posted',wf:'PostedPaymentWorkflow',iv:3,lab:'every 30s',door:false,rate:.15,dur:3,col:'var(--green)',steps:'ledger entry → available balance → notify',
   payload:'paymentId, accountId, direction, amount, currency, postedAt, valueDate, channel, coreTransactionId'},
- {k:'PAYMENT_SETTLED',s:'Settled',wf:'SettledPaymentWorkflow',iv:15,lab:'every 5m',door:false,rate:.18,dur:2,col:'var(--amber)',steps:'reconcile fee → release hold → close',
+ {k:'PAYMENT_SETTLED',s:'Settled',wf:'SettledPaymentWorkflow',iv:15,lab:'every 5m',door:false,rate:.04,dur:4,col:'var(--amber)',steps:'reconcile fee → release hold → close',
   payload:'settlementId, paymentId, rail, clearingSystem, settlementDate, amount, fee, currency, batchId'}];
-const SEED_WAIT=[3,1,2,4,2],SEED_DONE=[12,3,5,18,4],BATCH=25,GAP=1.2;
+const SEED_WAIT=[2,1,1,2,1],SEED_DONE=[12,3,5,18,4],BATCH=25,GAP=1.2;
 const rowTop=i=>110+i*34,rowC=i=>rowTop(i)+15;
+const an=s=>/^[AEIOU]/i.test(s)?'An':'A';
 const chipXY=i=>[618+(i%3)*141,374+(i<3?0:1)*50];
 
 function FlowDiagram(root,mode){
@@ -687,29 +697,35 @@ function FlowDiagram(root,mode){
     <div class="fd-top">
       <div><div class="olabel">${o2?'Option 2':'Option 1'}</div><h3>${o2?'Temporal Schedules with Kotlin Flow':'Temporal Schedules with a plain loop'}</h3></div>
       <div class="fd-ctrls">
-        <button type="button" data-act="burst">Send 20 inbound payments</button>
+        <button type="button" class="fd-play" data-act="play" aria-pressed="false">▶ Play</button>
+        <span class="fd-speed" role="group" aria-label="Speed"><button type="button" data-speed="0.45" aria-pressed="true">Slow</button><button type="button" data-speed="1" aria-pressed="false">Normal</button></span>
         <button type="button" data-act="traffic" aria-pressed="true">Steady traffic</button>
+        <button type="button" data-act="one">Send 1 payment</button>
+        <button type="button" data-act="burst">Send 20 inbound</button>
         <button type="button" data-act="reset">Reset</button>
       </div>
     </div>
-    <p class="fd-hint">Click a schedule to pause or resume it. Click any box for details. Time is compressed: a minute passes in six seconds.</p>
+    <p class="fd-hint">Each dot is one payment. Follow a dot from left to right through steps 1 to 5. Click a schedule (step 3) to pause it, and click any box for details. Tip: switch off steady traffic and send one payment at a time.</p>
+    <p class="fd-now" aria-live="polite"><b>Now:</b> <span>Press Play to start.</span></p>
     <div class="dg-scroll"><svg class="fdsvg" viewBox="0 0 1060 490" role="img" aria-label="${o2?'Option 2':'Option 1'} architecture: HTTP API, payment_events table, ${o2?'doorbell, ':''}Temporal Schedules, DispatcherWorkflow and business workflows"></svg></div>
     <div class="fd-info"><div class="panel"><span class="kind">Live log</span><ul class="fd-log"></ul></div><div class="panel fd-sel"></div></div>`;
-  const svg=root.querySelector('svg'),logEl=root.querySelector('.fd-log'),selEl=root.querySelector('.fd-sel');
-  const defs=el('defs',{},svg),mk=el('marker',{id:uid+'-ah',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'},defs);
-  el('path',{d:'M0,0 L10,5 L0,10 z',style:'fill:var(--dg-wire)'},mk);
+  const svg=root.querySelector('svg'),logEl=root.querySelector('.fd-log'),selEl=root.querySelector('.fd-sel'),nowEl=root.querySelector('.fd-now span'),playBtn=root.querySelector('.fd-play');
+  const defs=el('defs',{},svg);
+  [['ah','var(--dg-wire)'],['ah-on','var(--accent)']].forEach(([n,c])=>{const mk=el('marker',{id:`${uid}-${n}`,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'},defs);el('path',{d:'M0,0 L10,5 L0,10 z',style:'fill:'+c},mk)});
   const gW=el('g',{},svg),gL=el('g',{},svg),gB=el('g',{},svg),gD=el('g',{},svg);
 
-  // ---- wires (data flows left to right along the top row; control comes from below) ----
+  // ---- wires: payments travel left to right along the top; wake-ups come from below ----
   const W={post:[[126,150],[166,150]],insert:[[316,150],[386,150]],claim:[[566,130],[636,130]],started:[[636,250],[566,250]],
            start:[[816,180],[886,180]],done:[[965,72],[965,42],[476,42],[476,72]],run:[[726,340],[726,290]]};
   const LB={post:['POST',146,150],insert:['INSERT',351,150],claim:['claim',601,130],started:['STARTED',601,250],start:['start',851,180],done:['mark DONE / FAILED',720,42],run:['start run',726,316]};
   if(o2){W.notify=[[476,290],[476,350]];W.trigger=[[536,386],[606,386]];LB.notify=['NOTIFY',476,320];LB.trigger=['trigger',571,386]}
-  for(const k in W)el('path',{d:'M'+W[k].map(p=>p.join(',')).join(' L'),class:'wire',style:`marker-end:url(#${uid}-ah)`},gW);
+  const wireEls={},live={};
+  for(const k in W){wireEls[k]=el('path',{d:'M'+W[k].map(p=>p.join(',')).join(' L'),class:'wire',style:`marker-end:url(#${uid}-ah)`},gW);live[k]=0}
+  function lit(keys,d){keys.forEach(k=>{if(!wireEls[k])return;live[k]+=d;const on=live[k]>0;wireEls[k].classList.toggle('live',on);wireEls[k].style.markerEnd=`url(#${uid}-${on?'ah-on':'ah'})`})}
   for(const k in LB){const [s,x,y]=LB[k],g=el('g',{class:'wl'},gL),t=tx(g,0,0,'',s),w=t.getComputedTextLength()+12;
     el('rect',{x:-w/2,y:-8,width:w,height:16,rx:8},g);g.appendChild(t);t.setAttribute('x',-w/2+6);t.setAttribute('y',3.8);g.setAttribute('transform',`translate(${x},${y})`)}
 
-  // ---- boxes ----
+  // ---- boxes (numbered in reading order) ----
   const boxes={};
   function box(id,x,y,w,h,title){
     const g=el('g',{class:'fbox','data-id':id,tabindex:0,role:'button','aria-label':title+': details'},gB);
@@ -720,22 +736,22 @@ function FlowDiagram(root,mode){
     tx(g,x+12,y+17.5,'bt',title);boxes[id]=g;return g}
   const clock=tx(svg,16,40,'clk','09:02:00');tx(svg,16,58,'s','Monday morning');
   let g=box('cli',16,120,110,60,'Client');tx(g,26,152,'s','app · partner');tx(g,26,167,'s','clearing file');
-  g=box('api',166,100,150,100,'HTTP API');tx(g,178,146,'t','POST /events/{type}');tx(g,178,165,'s','validate payload');tx(g,178,182,'s','store as NEW');
-  g=box('tab',386,72,180,218,'payment_events');tx(g,554,89.5,'s2','Postgres','end');
+  g=box('api',166,100,150,100,'1 · HTTP API');tx(g,178,146,'t','POST /events/{type}');tx(g,178,165,'s','validate payload');tx(g,178,182,'s','store as NEW');
+  g=box('tab',386,72,180,218,'2 · payment_events');
   const rowEls=FT.map((t,i)=>{const rg=el('g',{class:'frow','data-id':'row'+i,tabindex:0,role:'button','aria-label':t.s+' events: details'},gB);
     el('rect',{x:394,y:rowTop(i),width:164,height:30,rx:7,class:'rowbg'},rg);
     const fill=el('rect',{x:394,y:rowTop(i),width:0,height:30,rx:7,class:'rowfill',style:`fill:${t.col}`},rg);
     el('circle',{cx:405,cy:rowC(i),r:4,style:`fill:${t.col}`},rg);tx(rg,415,rowC(i)+4,'t',t.s);
     const n=tx(rg,550,rowC(i)+4,'s','','end');return {rg,fill,n}});
-  g=box('dsp',636,72,180,218,'DispatcherWorkflow');
-  const STEPS=['1 · read limits','2 · check capacity','3 · claim (SKIP LOCKED)',o2?'4 · start 8 in parallel':'4 · start one at a time','5 · mark STARTED'];
+  g=box('dsp',636,72,180,218,'4 · DispatcherWorkflow');
+  const STEPS=['a · read limits','b · check capacity','c · claim (SKIP LOCKED)',o2?'d · start 8 in parallel':'d · start one at a time','e · mark STARTED'];
   const stepEls=STEPS.map((s,i)=>{const y=114+i*30;const hl=el('rect',{x:644,y:y-15,width:164,height:22,rx:6,class:'step-hl'},g);tx(g,652,y,'t',s);return hl});
   const status=tx(g,652,276,'s','idle');
-  g=box('wf',886,72,158,218,'Business workflows');
+  g=box('wf',886,72,158,218,'5 · Business workflows');
   const wfEls=FT.map((t,i)=>{const rg=el('g',{},g);el('rect',{x:894,y:rowTop(i),width:142,height:30,rx:7,class:'rowbg'},rg);
     el('circle',{cx:905,cy:rowTop(i)+11,r:4,style:`fill:${t.col}`},rg);tx(rg,915,rowTop(i)+15,'t',t.s);
     return tx(rg,915,rowTop(i)+26,'s2','')});
-  g=box('sch',606,340,438,140,'Temporal Schedules');tx(g,1032,357.5,'s2','one per event type','end');
+  g=box('sch',606,340,438,140,'3 · Temporal Schedules');tx(g,1032,357.5,'s2','one per event type','end');
   const chipEls=FT.map((t,i)=>{const [x,y]=chipXY(i);const cg=el('g',{class:'chip-s',tabindex:0,role:'button','data-chip':i,'aria-label':`Pause or resume the ${t.s} schedule`},gB);
     el('rect',{x,y,width:132,height:40,rx:8,class:'cb'},cg);el('circle',{cx:x+11,cy:y+13,r:4,style:`fill:${t.col}`},cg);
     tx(cg,x+20,y+17,'t',t.s);tx(cg,x+11,y+30,'s2',t.lab);const st=tx(cg,x+122,y+17,'s2 st','running','end');
@@ -745,16 +761,18 @@ function FlowDiagram(root,mode){
   g=box('leg',16,350,330,130,'Event types');
   FT.forEach((t,i)=>{const x=i<3?28:188,y=394+(i%3)*24;el('circle',{cx:x+4,cy:y-4,r:4.5,style:`fill:${t.col}`},g);tx(g,x+14,y,'s',t.s+(i===0||i===2?' · priority 1':' · priority 2'))});
   let ringEl=null;
-  if(o2){g=box('door',396,350,140,72,'Doorbell');tx(g,408,394,'t','LISTEN → Flow');tx(g,408,411,'s','conflate() · 2 s gap');ringEl=el('circle',{cx:522,cy:363,r:5,class:'ring'},g)}
+  if(o2){g=box('door',396,350,140,72,'Doorbell');tx(g,408,394,'t','LISTEN → Flow');tx(g,408,411,'s','wakes step 3 early');ringEl=el('circle',{cx:522,cy:363,r:5,class:'ring'},g)}
 
   // ---- state ----
   const S={wait:[],run:[],done:[],paused:[],cd:[],acc:[],lastTrig:[],pend:[]};
-  let runs=[],cur=null,traffic=true,simT=0,dots=[],retCool=0,sel='api';
-  function reset(){FT.forEach((t,i)=>{S.wait[i]=SEED_WAIT[i];S.run[i]=[];S.done[i]=SEED_DONE[i];S.paused[i]=false;S.cd[i]=t.iv*(.25+.15*i);S.acc[i]=0;S.lastTrig[i]=-99;S.pend[i]=false});
-    runs=[];cur=null;dots.forEach(d=>d.el.remove());dots=[];simT=0;logEl.innerHTML='';
-    log('Payments arrive over HTTP and wait as NEW until their dispatcher runs.');render();setStep(-1)}
+  let runs=[],cur=null,traffic=true,simT=0,dots=[],retCool=0,sel='api',playing=false,speed=.45,nowPrio=0,nowAt=-99,oneIdx=0;
+  function reset(){FT.forEach((t,i)=>{S.wait[i]=SEED_WAIT[i];S.run[i]=[];S.done[i]=SEED_DONE[i];S.paused[i]=false;S.cd[i]=t.iv*(.35+.12*i);S.acc[i]=0;S.lastTrig[i]=-99;S.pend[i]=false});
+    runs=[];cur=null;dots.forEach(d=>{d.el.remove();lit(d.keys,-1)});dots=[];simT=0;logEl.innerHTML='';nowPrio=0;nowAt=-99;
+    log('Payments arrive over HTTP and wait as NEW until their dispatcher runs.');say(playing?'Waiting for the next payment.':'Press Play to start.',0);render();setStep(-1)}
   function hhmmss(){const s=Math.floor(9*3600+120+simT*10);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(v=>String(v).padStart(2,'0')).join(':')}
   function log(h){const li=document.createElement('li');li.innerHTML=`<time>${hhmmss()}</time>${h}`;logEl.prepend(li);while(logEl.children.length>5)logEl.lastChild.remove()}
+  /** One plain-language line about what is happening; dispatcher news outranks arrivals for a moment. */
+  function say(h,prio){if(prio<nowPrio&&simT-nowAt<2.2)return;nowPrio=prio;nowAt=simT;nowEl.innerHTML=h}
   function render(){
     FT.forEach((t,i)=>{const w=S.wait[i];rowEls[i].n.textContent=w+' waiting';rowEls[i].fill.setAttribute('width',Math.min(1,w/30)*164);
       rowEls[i].rg.classList.toggle('held',S.paused[i]&&w>0);
@@ -764,37 +782,45 @@ function FlowDiagram(root,mode){
   function setStep(k){stepEls.forEach((h,i)=>h.classList.toggle('on',i===k))}
   function flash(elm,cls,ms){if(!elm)return;elm.classList.add(cls);setTimeout(()=>elm.classList.remove(cls),ms)}
 
-  // ---- dots (one dot = one payment) ----
-  function dot(pts,col,dur,done,delay,r){if(REDUCED){done&&done();return}
-    const c=el('circle',{r:r||5,cx:pts[0][0],cy:pts[0][1],class:'fdot',style:`fill:${col}`},gD);if(delay)c.style.opacity='0';
+  // ---- dots (one dot = one payment); a wire lights up while a dot travels on it ----
+  function dot(pts,col,dur,done,delay,r,keys){keys=keys||[];if(REDUCED){done&&done();return}
+    const c=el('circle',{r:r||6,cx:pts[0][0],cy:pts[0][1],class:'fdot',style:`fill:${col}`},gD);c.style.opacity='0';
     const segs=[];let L=0;for(let i=1;i<pts.length;i++){const d=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);segs.push([pts[i-1],pts[i],L,d]);L+=d}
-    dots.push({el:c,segs,L,t:-(delay||0),dur,done})}
-  function moveDots(dt){const fin=[];dots=dots.filter(d=>{d.t+=dt;if(d.t<0)return true;d.el.style.opacity='1';
-      const f=Math.min(1,d.t/d.dur),at=f*d.L,s=d.segs.find(s=>at<=s[2]+s[3])||d.segs[d.segs.length-1],k=s[3]?(at-s[2])/s[3]:1;
+    dots.push({el:c,segs,L,t:-(delay||0),dur,done,keys,on:false})}
+  function moveDots(dt){const fin=[];dots=dots.filter(d=>{d.t+=dt;if(d.t<0)return true;if(!d.on){d.on=true;d.el.style.opacity='1';lit(d.keys,1)}
+      const f=Math.min(1,d.t/d.dur),e=f<.5?2*f*f:1-Math.pow(-2*f+2,2)/2,at=e*d.L,s=d.segs.find(s=>at<=s[2]+s[3])||d.segs[d.segs.length-1],k=s[3]?(at-s[2])/s[3]:1;
       d.el.setAttribute('cx',s[0][0]+(s[1][0]-s[0][0])*k);d.el.setAttribute('cy',s[0][1]+(s[1][1]-s[0][1])*k);
-      if(f>=1){d.el.remove();fin.push(d.done);return false}return true});fin.forEach(f=>f&&f())}
+      if(f>=1){d.el.remove();lit(d.keys,-1);fin.push(d.done);return false}return true});fin.forEach(f=>f&&f())}
 
   // ---- behaviour ----
-  function arrive(i,delay){const t=FT[i];dot([[126,150],[386,150],[394,rowC(i)]],t.col,.8,()=>{S.wait[i]++;render();if(o2&&t.door)ring(i)},delay)}
-  function ring(i){flash(ringEl,'on',250);if(simT-S.lastTrig[i]<GAP){S.pend[i]=true;return}fire(i)}
+  function arrive(i,delay){const t=FT[i];if(!delay)say(`${an(t.s)} <b>${t.s}</b> payment arrives over HTTP (step 1) and is stored as NEW in <code>payment_events</code> (step 2).`,1);
+    dot([[126,150],[386,150],[394,rowC(i)]],t.col,1.8,()=>{S.wait[i]++;render();if(o2&&t.door)ring(i)},delay,6,['post','insert'])}
+  function ring(i){flash(ringEl,'on',400);if(simT-S.lastTrig[i]<GAP){S.pend[i]=true;return}fire(i)}
   function fire(i){S.lastTrig[i]=simT;S.pend[i]=false;const t=FT[i],[x,y]=chipXY(i);
-    if(S.paused[i]){log(`Doorbell: <b>${t.s}</b> rang, but its schedule is paused, so it skipped the trigger.`);return}
-    dot([[536,386],[606,386],[x+66,y+20]],'var(--accent)',.45,()=>{flash(chipEls[i].cg,'tick',300);enqueue(i,'doorbell')},0,4)}
-  function tick(i){flash(chipEls[i].cg,'tick',300);if(S.wait[i]>0)enqueue(i,'tick')}
+    if(S.paused[i]){log(`Doorbell: <b>${t.s}</b> rang, but its schedule is paused, so it skipped the trigger.`);say(`The doorbell heard a new <b>${t.s}</b> row, but that schedule is paused, so it does nothing.`,3);return}
+    say(`The doorbell heard the new <b>${t.s}</b> row and wakes its schedule now, without waiting for the tick.`,3);
+    dot([[536,386],[606,386],[x+66,y+20]],'var(--accent)',1,()=>{flash(chipEls[i].cg,'tick',600);enqueue(i,'doorbell')},0,5,['notify','trigger'])}
+  function tick(i){flash(chipEls[i].cg,'tick',600);if(S.wait[i]>0&&!S.paused[i]){say(`The <b>${FT[i].s}</b> schedule fires (step 3) and starts a dispatcher run.`,2);enqueue(i,'tick')}}
   function enqueue(i,why){if(runs.some(r=>r.i===i))return;if(S.wait[i]===0&&!(cur&&cur.i===i))return;
-    runs.push({i,why});dot([[726,340],[726,290]],'var(--accent)',.35,null,0,4)}
+    runs.push({i,why});dot([[726,340],[726,290]],'var(--accent)',.8,null,0,5,['run'])}
+  const PH=.65;
   function stepRun(dt){
     if(!cur){if(!runs.length){setStep(-1);status.textContent='idle';return}const r=runs.shift();cur={i:r.i,why:r.why,ph:0,t:0,n:0,left:0,gap:0}}
     const t=FT[cur.i];cur.t+=dt;
-    if(cur.ph<2){setStep(cur.ph);status.textContent=`${t.s} · ${cur.ph?'checking capacity':'reading limits'}`;if(cur.t>=.25){cur.t=0;cur.ph++}return}
+    if(cur.ph<2){setStep(cur.ph);status.textContent=`${t.s} · ${cur.ph?'checking capacity':'reading limits'}`;
+      if(cur.t<=dt)say(cur.ph?`Dispatcher (step 4b): how many more <b>${t.s}</b> workflows may be open? That is the in-flight cap.`:`Dispatcher (step 4a) wakes up for <b>${t.s}</b> and reads its limits from <code>dispatch_config</code>.`,4);
+      if(cur.t>=PH){cur.t=0;cur.ph++}return}
     if(cur.ph===2){setStep(2);if(cur.n===0&&cur.t<=dt){const n=Math.min(S.wait[cur.i],BATCH);S.wait[cur.i]-=n;cur.n=n;cur.left=n;render();
-        for(let k=0;k<Math.min(n,4);k++)dot([[556,rowC(cur.i)],[566,130],[636,130]],t.col,.4,null,k*.07)}
-      status.textContent=`${t.s} · claimed ${cur.n}`;if(cur.t>=.55){cur.t=0;cur.ph=cur.n?3:4}return}
+        say(`Dispatcher (step 4c) claims ${n} <b>${t.s}</b> row${n===1?'':'s'} with SKIP LOCKED, so no other run can take them.`,4);
+        for(let k=0;k<Math.min(n,4);k++)dot([[556,rowC(cur.i)],[566,130],[636,130]],t.col,.9,null,k*.15,6,['claim'])}
+      status.textContent=`${t.s} · claimed ${cur.n}`;if(cur.t>=PH+.5){cur.t=0;cur.ph=cur.n?3:4}return}
     if(cur.ph===3){setStep(3);cur.gap-=dt;if(cur.gap<=0&&cur.left>0){const grp=o2?Math.min(8,cur.left):1,i=cur.i;
-        for(let k=0;k<grp;k++)dot([[816,180],[886,180],[894,rowTop(i)+15]],t.col,.45,()=>{S.run[i].push(simT+t.dur*(.8+.4*Math.random()));render()},k*.03);
-        cur.left-=grp;cur.gap=o2?.16:.11}
-      status.textContent=`${t.s} · started ${cur.n-cur.left} of ${cur.n}`;if(cur.left===0&&cur.gap<=0){cur.ph=4;cur.t=0;dot(W.started,'var(--accent)',.3,null,0,4)}return}
-    setStep(4);if(cur.t>=.3){if(cur.n)log(`<b>${t.s}</b> dispatcher (${cur.why==='doorbell'?'doorbell trigger':'schedule tick'}): claimed ${cur.n}, started ${cur.n} ${o2?'up to 8 at a time':'one at a time'}.`);cur=null}}
+        if(cur.left===cur.n)say(o2?`Dispatcher (step 4d) starts <b>${t.s}</b> workflows up to 8 at a time (<code>flatMapMerge(8)</code>).`:`Dispatcher (step 4d) starts <b>${t.s}</b> workflows one at a time.`,4);
+        for(let k=0;k<grp;k++)dot([[816,180],[886,180],[894,rowTop(i)+15]],t.col,1.1,()=>{S.run[i].push(simT+t.dur*(.8+.4*Math.random()));render()},k*.04,6,['start']);
+        cur.left-=grp;cur.gap=o2?1:.55}
+      status.textContent=`${t.s} · started ${cur.n-cur.left} of ${cur.n}`;if(cur.left===0&&cur.gap<=0){cur.ph=4;cur.t=0;dot(W.started,'var(--accent)',.7,null,0,5,['started'])}return}
+    setStep(4);if(cur.t<=dt&&cur.n)say(`Dispatcher (step 4e) marks the rows STARTED. Step 5: each <b>${t.s}</b> workflow now does the real work.`,4);
+    if(cur.t>=PH+.2){if(cur.n)log(`<b>${t.s}</b> dispatcher (${cur.why==='doorbell'?'doorbell trigger':'schedule tick'}): claimed ${cur.n}, started ${cur.n} ${o2?'up to 8 at a time':'one at a time'}.`);cur=null}}
   function step(dt){
     simT+=dt;
     if(traffic)FT.forEach((t,i)=>{S.acc[i]+=t.rate*dt;while(S.acc[i]>=1){S.acc[i]--;arrive(i)}});
@@ -802,7 +828,7 @@ function FlowDiagram(root,mode){
       chipEls[i].bar.setAttribute('width',Math.max(0,Math.min(1,1-S.cd[i]/t.iv))*110);
       if(o2&&S.pend[i]&&simT-S.lastTrig[i]>=GAP)fire(i);
       const before=S.run[i].length;S.run[i]=S.run[i].filter(e=>e>simT);const fin=before-S.run[i].length;
-      if(fin){S.done[i]+=fin;if(retCool<=0){dot(W.done,t.col,.7,null,0,4);retCool=.35}}});
+      if(fin){S.done[i]+=fin;if(retCool<=0){say(`${an(t.s)} <b>${t.s}</b> workflow finished and marked its row DONE in <code>payment_events</code>.`,1);dot(W.done,t.col,1.6,null,0,5,['done']);retCool=1}}});
     retCool-=dt;stepRun(dt);moveDots(dt);render()}
 
   // ---- details panel ----
@@ -811,15 +837,15 @@ function FlowDiagram(root,mode){
       `Picked up ${t.lab}${o2&&t.door?', or within seconds when the doorbell rings':''}.`,`Runs <code>${t.wf}</code>: ${t.steps}.`]]}
     const D={
       cli:['Where payments come from','Client',['A mobile app, a partner API or a clearing-file loader.','Each payment becomes one HTTP call to the API.']],
-      api:['Quarkus REST','HTTP API',['<code>POST /events/{type}</code> takes one payment as JSON, for example <code>POST /events/INBOUND_PAYMENT</code>.','The body is checked against that type’s payload class. A bad body gets <code>400</code>.','One row is stored with status NEW, and the reply is <code>202 Accepted</code> with the new id.','Future-dated payments get <code>available_at = scheduledFor − 5 min</code>.']],
-      tab:['Postgres','payment_events',['One row per event: NEW → CLAIMED → STARTED → DONE or FAILED.','The table is the source of truth. Click a row to see that type’s payload.','Dispatchers claim rows with <code>FOR UPDATE SKIP LOCKED</code> and a lease, so two runs never take the same row.']],
-      dsp:['Temporal · one generic workflow','DispatcherWorkflow',[o2?'Started by a schedule tick or a doorbell trigger, for one event type.':'Started by a schedule tick, for one event type.',
-        '1 · read limits from <code>dispatch_config</code>.','2 · capacity = maxInflight − in-flight.','3 · claim up to that many rows with SKIP LOCKED and a lease.',
-        o2?'4 · start up to 8 workflows at once with <code>flatMapMerge(8)</code>. The next batch is claimed only when there is room.':'4 · start workflows one at a time, behind a token bucket.',
-        '5 · mark each row STARTED. The run ends when the table is empty, the cap is reached or its time budget runs out.']],
-      wf:['Temporal','Business workflows',['Each event type has its own workflow and task queue.',...FT.map(t=>`<b>${t.s}:</b> ${t.steps}.`),'The last step marks the row DONE or FAILED.']],
-      sch:['Temporal','Temporal Schedules',['One schedule per event type, each with its own interval. Overlap policy SKIP.','Click a schedule to pause it. Its payments wait as NEW, running workflows finish, and the other types keep flowing.',
-        o2?'In Option 2 the doorbell can also trigger a schedule between ticks, but never a paused one.':'In Option 1, only the interval starts a dispatcher run.']],
+      api:['Step 1 · Quarkus REST','HTTP API',['<code>POST /events/{type}</code> takes one payment as JSON, for example <code>POST /events/INBOUND_PAYMENT</code>.','The body is checked against that type’s payload class. A bad body gets <code>400</code>.','One row is stored with status NEW, and the reply is <code>202 Accepted</code> with the new id.','Future-dated payments get <code>available_at = scheduledFor − 5 min</code>.']],
+      tab:['Step 2 · Postgres','payment_events',['One row per event: NEW → CLAIMED → STARTED → DONE or FAILED.','The table is the source of truth. Click a row to see that type’s payload.','Dispatchers claim rows with <code>FOR UPDATE SKIP LOCKED</code> and a lease, so two runs never take the same row.']],
+      dsp:['Step 4 · one generic workflow','DispatcherWorkflow',[o2?'Started by a schedule tick or a doorbell trigger, for one event type.':'Started by a schedule tick, for one event type.',
+        'a · read limits from <code>dispatch_config</code>.','b · capacity = maxInflight − in-flight.','c · claim up to that many rows with SKIP LOCKED and a lease.',
+        o2?'d · start up to 8 workflows at once with <code>flatMapMerge(8)</code>. The next batch is claimed only when there is room.':'d · start workflows one at a time, behind a token bucket.',
+        'e · mark each row STARTED. The run ends when the table is empty, the cap is reached or its time budget runs out.']],
+      wf:['Step 5 · Temporal','Business workflows',['Each event type has its own workflow and task queue.',...FT.map(t=>`<b>${t.s}:</b> ${t.steps}.`),'The last step marks the row DONE or FAILED.']],
+      sch:['Step 3 · Temporal','Temporal Schedules',['One schedule per event type, each with its own interval. The thin bar fills up until the next tick.','Click a schedule to pause it. Its payments wait as NEW, running workflows finish, and the other types keep flowing.',
+        o2?'In Option 2 the doorbell can also wake a schedule between ticks, but never a paused one.':'In Option 1, only the interval starts a dispatcher run.']],
       door:['Option 2 · Kotlin Flow','Doorbell',['A trigger on the table calls <code>pg_notify</code> with the event type.','The app runs <code>LISTEN</code> on its own JDBC connection inside a cold <code>flow { }</code>, shared with <code>shareIn</code>.','Per type: <code>filter</code>, then <code>conflate()</code>. A burst of rings becomes at most one trigger every 2 seconds.','It skips paused schedules, then calls <code>trigger(BUFFER_ONE)</code>. On for Inbound and Returned only.']],
       leg:['Legend','Event types',['Each dot is one payment, colored by its event type.','Priority 1: Inbound and Scheduled. Priority 2: Returned, Posted and Settled.']]};
     return D[id]}
@@ -827,20 +853,26 @@ function FlowDiagram(root,mode){
     const target=id.startsWith('row')?rowEls[+id.slice(3)].rg:boxes[id];if(target)target.classList.add('sel');
     const [k,t,items]=details(id);selEl.innerHTML=`<span class="kind">${k}</span><h3>${esc(t)}</h3><ul>${items.map(x=>`<li>${x}</li>`).join('')}</ul>`}
   function togglePause(i){S.paused[i]=!S.paused[i];const t=FT[i];
-    log(S.paused[i]?`Schedule <b>dispatch-${t.k}</b> paused (note: INC-4711). ${t.s} payments will wait; the others keep flowing.`:`Schedule <b>dispatch-${t.k}</b> resumed. The next ${o2&&t.door?'ring or ':''}tick drains the backlog.`);render()}
+    log(S.paused[i]?`Schedule <b>dispatch-${t.k}</b> paused (note: INC-4711). ${t.s} payments will wait; the others keep flowing.`:`Schedule <b>dispatch-${t.k}</b> resumed. The next ${o2&&t.door?'ring or ':''}tick drains the backlog.`);
+    say(S.paused[i]?`The <b>${t.s}</b> schedule is paused. New ${t.s} payments wait in the table; every other type keeps flowing.`:`The <b>${t.s}</b> schedule is running again. Its next tick drains the waiting rows.`,5);render()}
+  function setPlaying(p){playing=p;playBtn.setAttribute('aria-pressed',p);playBtn.textContent=p?'❚❚ Pause':'▶ Play';if(p&&simT===0)say('Waiting for the next payment.',0)}
   svg.addEventListener('click',e=>{const c=e.target.closest('[data-chip]');if(c){togglePause(+c.getAttribute('data-chip'));return}
     const b=e.target.closest('[data-id]');if(b)select(b.getAttribute('data-id'))});
   svg.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const c=e.target.closest('[data-chip]'),b=e.target.closest('[data-id]');
     if(c||b){e.preventDefault();if(c)togglePause(+c.getAttribute('data-chip'));else select(b.getAttribute('data-id'))}});
-  root.querySelector('.fd-ctrls').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const a=b.dataset.act;
-    if(a==='burst'){for(let k=0;k<20;k++)arrive(0,k*.05);log('20 inbound payments arrived via <code>POST /events/INBOUND_PAYMENT</code>.')}
+  root.querySelector('.fd-ctrls').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+    if(b.dataset.speed){speed=+b.dataset.speed;root.querySelectorAll('[data-speed]').forEach(x=>x.setAttribute('aria-pressed',x===b));return}
+    const a=b.dataset.act;
+    if(a==='play')setPlaying(!playing);
+    if(a==='one'){setPlaying(true);const i=oneIdx++%FT.length;arrive(i);log(`One <b>${FT[i].s}</b> payment sent via <code>POST /events/${FT[i].k}</code>.`)}
+    if(a==='burst'){setPlaying(true);for(let k=0;k<20;k++)arrive(0,k*.18);say('20 <b>Inbound</b> payments arrive over HTTP, one after another.',2);log('20 inbound payments arrived via <code>POST /events/INBOUND_PAYMENT</code>.')}
     if(a==='traffic'){traffic=!traffic;b.setAttribute('aria-pressed',traffic)}
-    if(a==='reset')reset()});
+    if(a==='reset'){setPlaying(false);reset()}});
 
   reset();select('api');
   let last=performance.now(),visible=true;
   if('IntersectionObserver' in window)new IntersectionObserver(es=>{visible=es[0].isIntersecting},{threshold:.05}).observe(svg);
-  function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;if(visible&&!document.hidden)step(dt);requestAnimationFrame(frame)}
+  function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;if(playing&&visible&&!document.hidden)step(dt*speed);requestAnimationFrame(frame)}
   requestAnimationFrame(frame);
 }
 FlowDiagram(document.getElementById('fd1'),'opt1');
