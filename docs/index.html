@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="Temporal Schedules with vs without reactive streams for dispatching payment events from Postgres.">
+<meta name="description" content="Temporal Schedules with a plain loop vs with Kotlin Flow for dispatching payment events from Postgres: built, measured and compared.">
 <title>Temporal Event Dispatcher</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
@@ -246,18 +246,38 @@ svg.arch text{font-family:var(--font)}
 .code-head{background:var(--code-head-bg);color:#fff;font:500 12.5px var(--mono);padding:8px 12px}
 .code pre{margin:0;padding:14px 16px;overflow-x:auto;font:12.5px/1.65 var(--mono);color:var(--txt)}
 .code .c{color:var(--mut)}
+
+/* prose (Venkat-voice chapter layout) */
+.prose{display:flex;flex-direction:column;gap:14px;max-width:780px}
+.prose p,.prose li{font-size:1.06rem;line-height:1.72}
+.prose h3{margin-top:12px;font-size:1.12rem}
+.prose ul{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px}
+.analogy{background:var(--band);border:1px solid var(--line);border-radius:12px;padding:14px 18px}
+.rule{color:var(--title);font-size:1.08rem}
+.cap{font-size:.86rem;color:var(--mut);margin:0}
+section>.code{margin-top:0}
 </style>
 </head>
 <body>
 <div class="wrap">
 
 <header>
-  <div class="kicker">Design comparison · payment events → Temporal</div>
+  <div class="kicker">Design notes · payment events → Temporal</div>
   <h1>Temporal Event Dispatcher</h1>
-  <p class="lede">Two ways to turn payment events stored in Postgres into Temporal workflows without overloading Temporal's Aurora database. Both use one Temporal Schedule per event type. The difference is whether reactive streams (Postgres <code>NOTIFY</code> plus Kotlin Flow) sit in front of and inside the dispatcher.</p>
+  <p class="lede">Two ways to move payment events from Postgres into Temporal without overloading Temporal's Aurora database. We build both, measure both and pick one.</p>
   <div class="chips" aria-label="Tech stack">
-    <span class="chip"><i></i>Kotlin</span><span class="chip"><i></i>Quarkus</span><span class="chip"><i></i>Postgres</span><span class="chip"><i></i>Exposed</span><span class="chip"><i></i>Temporal on Aurora Postgres</span><span class="chip"><i style="background:var(--violet)"></i>Oracle (later)</span>
+    <span class="chip"><i></i>Kotlin</span><span class="chip"><i></i>Kotlin Flow</span><span class="chip"><i></i>Quarkus</span><span class="chip"><i></i>Postgres</span><span class="chip"><i></i>Exposed</span><span class="chip"><i></i>Temporal on Aurora Postgres</span><span class="chip"><i style="background:var(--violet)"></i>Oracle (later)</span>
   </div>
+</header>
+
+<section id="intro">
+  <div class="prose">
+    <p>It's 9:02 on a Monday morning. The overnight wire and ACH files have just been processed, and 5,000 inbound payments are sitting in the <code>payment_events</code> table. Somewhere, a customer is refreshing a banking app to see whether the rent money has arrived. Behind Temporal sits one Aurora Postgres cluster, and it also stores the history of every other workflow the bank runs.</p>
+    <p>The first design that comes to mind is a loop: read the new rows and start a workflow for each one. Most of us would write it first, because it works beautifully in a demo with ten rows. The trouble only shows up at 9:02 on a Monday, with real volume and a shared database.</p>
+    <p>We've already settled two things. The table is the source of truth, and a Temporal Schedule per event type is what wakes a dispatcher up. The open question is what the dispatcher does once it's awake. Does it run a plain loop, or a pipeline built with Kotlin Flow, Kotlin's own take on reactive streams?</p>
+    <p>In this page, we'll build the dispatcher three times: a naive version, a careful loop and a Kotlin Flow version. We'll measure the last two on a laptop with the same 5,000 payments. Then we'll weigh them, pick one, and look at a PoC you can run yourself.</p>
+  </div>
+  <p class="cap">The five event types in the PoC. Each one has its own schedule, task queue and workflow.</p>
   <div class="events" aria-label="Event types in the PoC">
     <div><b>INBOUND_PAYMENT</b><span>Wire, ACH or RTP credit received</span></div>
     <div><b>PAYMENT_RETURNED</b><span>ACH return (R01, R02 …)</span></div>
@@ -265,74 +285,163 @@ svg.arch text{font-family:var(--font)}
     <div><b>PAYMENT_POSTED</b><span>Posted to the core ledger</span></div>
     <div><b>PAYMENT_SETTLED</b><span>Clearing confirmed settlement</span></div>
   </div>
-</header>
+</section>
 
-<div class="card decision">
-  <div>
-    <div class="kicker">Recommendation</div>
-    <h3>Option 2: Schedules with reactive streams, switched on per event type</h3>
-    <p class="muted" style="margin-top:6px;font-size:.95rem">It's a close call on paper. Option 2 wins on the two things payments feel most, latency and burst throughput. Its extra parts can be switched on per event type, and when they fail it falls back to Option 1's behavior.</p>
+<section id="naive">
+  <h2><span class="hnum">1</span>A loop that starts everything at once</h2>
+  <div class="prose">
+    <p>Let's begin with the version that comes to mind first, so we can see exactly where it breaks. We won't run this one; the arithmetic is enough.</p>
   </div>
-  <ul>
-    <li>Pickup in seconds for inbound and returned payments</li>
-    <li>Bounded parallel starts that slow down automatically when Temporal slows</li>
-    <li>Same controls as Option 1: pause, overlap policy, rate limits, governor</li>
-    <li>Cost: a listener and a coroutine pipeline to build, test and run</li>
-    <li>The PoC runs both: <code>DISPATCH_MODE=polling</code> or <code>reactive</code></li>
-  </ul>
-</div>
-
-<section id="options">
-  <h2><span class="hnum">1</span>The two options</h2>
-  <p class="sec-sub">Same table, same schedules, same workflows. Option 2 adds a wake-up signal and runs the dispatch loop as a Flow pipeline.</p>
-  <div class="duo">
-    <div class="card opt o1">
-      <div class="opt-head"><div><div class="olabel">Option 1</div><h3>Schedules without reactive streams</h3></div><span class="tag no">Simpler</span></div>
-      <div class="flow"><span>Schedule tick (30s–5m)</span><em>→</em><span>DispatcherWorkflow</span><em>→</em><span>claim ≤ capacity</span><em>→</em><span>start one at a time</span><em>→</em><span>mark STARTED</span></div>
-      <div class="pc pros"><h4>Pros</h4><ul>
-        <li>Fewest moving parts: a schedule, one activity and a status table.</li>
-        <li>A plain loop that's easy to read, test and debug.</li>
-        <li>Backpressure by design: it pulls only what capacity allows, one start at a time.</li>
-        <li>Works the same on Postgres and Oracle.</li></ul></div>
-      <div class="pc cons"><h4>Cons</h4><ul>
-        <li>Pickup waits up to one interval.</li>
-        <li>Sequential starts cap throughput at 1 ÷ start latency per event type (about 50/s at 20 ms).</li>
-        <li>A burst waits for the next tick even when Temporal is idle.</li></ul></div>
-    </div>
-    <div class="card opt o2">
-      <div class="opt-head"><div><div class="olabel">Option 2</div><h3>Schedules with reactive streams</h3></div><span class="tag ok">Recommended</span></div>
-      <div class="flow"><span class="rx">INSERT → pg_notify</span><em>→</em><span class="rx">Flow: latest ring, 2s gap</span><em>→</em><span>schedule.trigger()</span><em>→</em><span>DispatcherWorkflow</span><em>→</em><span class="rx">claim → flatMapMerge(8) start</span></div>
-      <div class="pc pros"><h4>Pros</h4><ul>
-        <li>Pickup in seconds for event types with the doorbell on.</li>
-        <li>Bounded parallel starts: up to n ÷ start latency, still capped by the rate limit.</li>
-        <li>Demand-driven: the next batch is claimed only when the start stage has room.</li>
-        <li>Slows down by itself when Temporal's response time rises.</li>
-        <li>If the listener dies, interval ticks still drain the table, exactly as in Option 1.</li></ul></div>
-      <div class="pc cons"><h4>Cons</h4><ul>
-        <li>More code: a LISTEN connection, reconnects, debouncing and a coroutine pipeline inside a blocking activity.</li>
-        <li>Push works only on Postgres. Oracle sources get the Flow pipeline but no doorbell.</li>
-        <li>Manual triggers need their own pause check.</li>
-        <li>Concurrency is harder to test and reason about.</li>
-        <li>NOTIFY takes a lock at commit, so keep the doorbell off for very busy event types.</li></ul></div>
-    </div>
+  <div class="code"><div class="code-head">NaiveDispatcher.kt</div><pre><span class="c">// Naive: this will not survive 9:02 on a Monday</span>
+fun dispatchEverything() {
+    val rows = repo.findAllNew()                        <span class="c">// all 5,000 of them</span>
+    rows.forEach { row -&gt;
+        client.newUntypedWorkflowStub(row.type.workflowType, optionsFor(row))
+            .start(EventRef(row.id, row.type.name))     <span class="c">// as fast as the loop can spin</span>
+    }
+}</pre></div>
+  <div class="prose">
+    <p>Read it slowly and it looks fine. Every row gets a workflow, and Temporal's workflow IDs even stop the same event from starting twice. Now picture the 9:02 burst. The loop fires 5,000 start calls as fast as it can spin. Each start writes to Temporal's history tables, and each workflow writes again for every activity it runs. Aurora receives the whole morning's work in a few seconds.</p>
+    <p>A few quieter problems hide in there too. Run two replicas of the app, and both read the same rows. Nothing records that a row was picked up, so a crash halfway through leaves us guessing which payments went out. And nothing in the loop ever says "that's enough for now".</p>
+    <p class="analogy">Think of a restaurant host on a busy evening. A host who walks every waiting guest into the dining room at once doesn't make dinner faster. The kitchen falls behind, and everyone waits longer. A good host seats people only as tables free up, and at a pace the kitchen can handle. In programming terms, the host is our dispatcher, the tables are in-flight workflow slots, and the kitchen is Temporal with its Aurora database.</p>
+    <p><strong class="rule">Start only what you can afford to have open. Put a cap on it.</strong></p>
+    <p>So the dispatcher needs to claim rows carefully and stop at a cap. That's our first real version.</p>
   </div>
 </section>
 
-<section id="backpressure">
-  <h2><span class="hnum">2</span>Backpressure</h2>
-  <p class="sec-sub">Where each option limits the flow of work, from new rows in the table to open workflows in Temporal.</p>
+<section id="loop">
+  <h2><span class="hnum">2</span>Version 1: a schedule and a polite loop</h2>
+  <div class="prose">
+    <p>Each event type gets its own Temporal Schedule. Every 30 seconds to 5 minutes, depending on the type, it starts a <code>DispatcherWorkflow</code>, and that workflow runs a single activity. The activity is the loop below, and this is Option 1.</p>
+  </div>
+  <div class="code"><div class="code-head">PollingDispatchEngine.kt (trimmed)</div><pre><span class="c">// Version 1: claim only what we can afford, start one at a time</span>
+while (clock.instant().isBefore(deadline)) {
+    val capacity = limits.maxInflight - store.countInflight(type)
+    if (capacity &lt;= 0) { Thread.sleep(500); continue }       <span class="c">// at the cap: wait, don't push</span>
+
+    val batch = store.claim(type, min(capacity, limits.batchSize), limits.lease)
+    if (batch.isEmpty()) break                                 <span class="c">// table drained</span>
+
+    for (event in batch) {
+        bucket.acquireBlocking()                               <span class="c">// a steady pace, no bursts</span>
+        starter.start(event)                                   <span class="c">// duplicate IDs are rejected</span>
+        store.markStarted(event.id, type.workflowId(event.id))
+    }
+}</pre></div>
+  <div class="prose">
+    <p>Three lines do the heavy lifting. The capacity check is the host glancing at free tables: claimed and running rows count against <code>maxInflight</code>, and at the cap the loop waits instead of pushing. The <code>claim</code> call locks a batch with <code>FOR UPDATE SKIP LOCKED</code> and marks it CLAIMED with a lease. A second replica skips those rows, and if a run crashes, its rows come back when the lease expires. Finally, the token bucket spaces the starts evenly, so even a big backlog reaches Temporal as a steady stream.</p>
+    <p>Before running it, I expected two weaknesses. Nothing happens until the next tick, and the starts go out one at a time. Let's insert the 5,000 payments and see whether the numbers agree.</p>
+    <p>Correctness first: all 5,000 workflows started, none started twice, and every one finished. The timing depends on where in the minute the burst lands. In one run it landed just after a tick, and the first row was picked up 57 seconds later. In another it landed one second before a tick (we got lucky), and pickup took 1.6 seconds. Once running, the loop started 123 workflows per second and had all 5,000 started after 40.6 seconds.</p>
+    <p>You may be thinking, "Then let the schedule tick every five seconds." We could. But each tick is a workflow run with its own history in Aurora. Five event types ticking every five seconds come to 86,400 dispatcher runs a day, and nearly all of them would find an empty table. That's a curious way to protect a database. It would also still start one workflow at a time.</p>
+    <p>Two numbers bother us now: up to a minute before anyone looks, and 123 starts a second when Temporal could clearly take more. Kotlin Flow can help with both.</p>
+  </div>
+</section>
+
+<section id="flow">
+  <h2><span class="hnum">3</span>Version 2: a doorbell and a Kotlin Flow</h2>
+  <div class="prose">
+    <p>Option 2 keeps everything we just built: the schedules, the claim, the cap and the token bucket. It adds two pieces, and both are plain Kotlin Flow from <code>kotlinx.coroutines</code>. No other reactive library is involved.</p>
+    <h3>The doorbell</h3>
+    <p>The first piece answers a simple question: how do we hear about new rows without polling for them? A small trigger on the table calls <code>pg_notify</code> with the event type whenever rows are inserted. The app listens on its own JDBC connection and turns the notifications into a Kotlin Flow.</p>
+  </div>
+  <div class="code"><div class="code-head">Doorbell.kt (trimmed)</div><pre><span class="c">// Version 2, part 1: Postgres LISTEN as a cold Kotlin Flow</span>
+fun pgNotifications(url: String, user: String, password: String, channel: String): Flow&lt;String&gt; = flow {
+    DriverManager.getConnection(url, user, password).use { conn -&gt;
+        conn.createStatement().use { it.execute("LISTEN $channel") }
+        val pg = conn.unwrap(PGConnection::class.java)
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            pg.getNotifications(1_000)?.forEach { emit(it.parameter) }   <span class="c">// payload = event type</span>
+        }
+    }
+}.flowOn(Dispatchers.IO)
+
+<span class="c">// One connection, shared by every event type</span>
+val rings = pgNotifications(url, user, password, "payment_events")
+    .retryWhen { _, attempt -&gt; delay(backoff(attempt)); true }      <span class="c">// reconnect, forever</span>
+    .mapNotNull { payload -&gt; EventType.entries.firstOrNull { it.name == payload } }
+    .shareIn(scope, SharingStarted.Eagerly)
+
+doorbellTypes.forEach { type -&gt;
+    rings.filter { it == type }
+        .conflate()                                                 <span class="c">// ten rings, one trip to the door</span>
+        .onEach { triggerUnlessPaused(type); delay(2.seconds) }
+        .launchIn(scope)
+}</pre></div>
+  <div class="prose">
+    <p>The <code>flow { }</code> builder wraps the LISTEN loop. Each call to <code>getNotifications(1_000)</code> waits up to a second for news, and <code>ensureActive()</code> lets the app stop the loop cleanly. The flow is cold, so nothing happens until someone collects it. Then <code>retryWhen</code> reconnects after a dropped connection, and <code>shareIn</code> turns the cold flow into a hot one, so a single database connection feeds every event type.</p>
+    <p class="analogy">The <code>conflate()</code> call is where the doorbell earns its name. If the bell rings ten times while you walk to the door, you still make one trip, because a ring only says that someone is there. In programming terms, a burst of 5,000 inserts produces a handful of rings, and each event type turns them into at most one schedule trigger every two seconds.</p>
+    <p>The trigger uses the overlap policy <code>BUFFER_ONE</code>: if a dispatcher is already running, Temporal queues exactly one more run behind it. And because a manual trigger may not respect a paused schedule, the doorbell checks the paused state first.</p>
+    <h3>The pipeline</h3>
+    <p>The second piece replaces the inner loop with a Flow pipeline. Compare it with the loop above; the shape is the same, but the waiting is different.</p>
+  </div>
+  <div class="code"><div class="code-head">ReactiveDispatchEngine.kt (trimmed)</div><pre><span class="c">// Version 2, part 2: the dispatch run as a Flow pipeline</span>
+flow {
+    while (clock.instant().isBefore(deadline)) {
+        val capacity = limits.maxInflight - store.countInflight(type)
+        if (capacity &lt;= 0) { delay(500); continue }              <span class="c">// at the cap: wait, holding no thread</span>
+        val batch = store.claim(type, min(capacity, limits.batchSize), limits.lease)
+        if (batch.isEmpty()) break
+        emit(batch)                                                <span class="c">// suspends until the start stage has room</span>
+    }
+}
+    .flatMapConcat { it.asFlow() }
+    .flatMapMerge(concurrency = limits.parallelism) { event -&gt;
+        flow {
+            bucket.acquire()                                       <span class="c">// suspends instead of blocking</span>
+            emit(withContext(io) {
+                starter.start(event).also { store.markStarted(event.id, type.workflowId(event.id)) }
+            })
+        }
+    }
+    .collect { outcome -&gt; tally(outcome) }</pre></div>
+  <div class="prose">
+    <p>The interesting word is <code>emit</code>. It suspends until the next stage is ready for more, so the pipeline claims a new batch only when the start stage has room. That's backpressure, and we didn't write a line of queue management to get it. <code>flatMapMerge</code> keeps up to <code>parallelism</code> start calls in flight (8 for inbound payments). The token bucket now suspends instead of blocking, so a waiting start holds no thread. The PoC's tests check both promises: never more than <code>parallelism</code> calls at once, and never more than <code>parallelism</code> unstarted rows when a new batch is claimed.</p>
+    <p>Same 5,000 payments, same limits. Correctness first again: 5,000 started, zero duplicates, all finished. The first row was picked up 0.4 seconds after the insert. The pipeline started 340 workflows per second and had all 5,000 started after 14.7 seconds, about 2.8 times faster than the loop. Five insert statements produced five rings and only two triggers, which is the doorbell doing its job. A later run with the default limits started 2,000 payments in 10.5 seconds, exactly what a rate limit of 200 per second allows.</p>
+    <p>You may be asking, "What if a notification gets lost?" Then a ring is lost, and nothing else. The table still holds every row, and the interval ticks keep running underneath. We even saw this happen by accident. In one run, an earlier build of the doorbell couldn't connect (it used a different Postgres client that was missing a library). Option 2 quietly behaved like Option 1, and every payment was processed.</p>
+    <p><strong class="rule">A notification is a hint. The table is the truth.</strong></p>
+    <p>So Kotlin Flow made dispatch 2.8 times faster. Does that mean payments finish 2.8 times faster? Let's look at the column we skipped.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <h2><span class="hnum">4</span>Where the speed-up stops</h2>
+  <div class="prose"><p>Here are both benchmark runs side by side, including the last row we've been quietly ignoring.</p></div>
   <div class="card tscroll"><table class="bp">
-    <thead><tr><th>Stage</th><th>Option 1 · without reactive</th><th>Option 2 · with reactive</th></tr></thead>
+    <thead><tr><th>Run A · the dispatcher sets the pace</th><th>Option 1 · plain loop</th><th>Option 2 · Kotlin Flow</th></tr></thead>
     <tbody>
-      <tr><td class="layer">New-event signal</td><td>Timer only, so there is nothing to overflow.</td><td>NOTIFY pushes without backpressure. Each type's ring flow keeps only the latest ring (buffer 1, drop oldest) and triggers at most once every 2s. Dropping extra rings loses nothing, because a ring only means "look at the table".</td></tr>
-      <tr><td class="layer">Claiming rows</td><td>Each batch claims at most <code>maxInflight − in-flight</code> rows.</td><td>Same query. The Flow claims the next batch only when downstream asks for it, because <code>emit</code> suspends until then.</td></tr>
+      <tr><td class="layer">First pickup after insert</td><td>1.6 s (a lucky tick); up to 60 s</td><td>0.4 s, from the doorbell</td></tr>
+      <tr><td class="layer">Start rate</td><td>123 per second, one call at a time</td><td>340 per second, 8 calls in flight</td></tr>
+      <tr><td class="layer">All 5,000 started</td><td>40.6 s</td><td>14.7 s</td></tr>
+      <tr><td class="layer">All 5,000 finished</td><td>117 s</td><td>115 s</td></tr>
+    </tbody></table></div>
+  <div class="card tscroll"><table class="bp">
+    <thead><tr><th>Run B · the workers set the pace</th><th>Option 1 · plain loop</th><th>Option 2 · Kotlin Flow</th></tr></thead>
+    <tbody>
+      <tr><td class="layer">First pickup after insert</td><td>57 s, waiting for the next tick</td><td>42 s; the doorbell had not connected, so ticks took over</td></tr>
+      <tr><td class="layer">Start rate</td><td>about 85 per second, held by the in-flight cap</td><td>about 83 per second, held by the in-flight cap</td></tr>
+      <tr><td class="layer">All 5,000 finished</td><td>172 s</td><td>157 s</td></tr>
+    </tbody></table></div>
+  <p class="cap">Run A: in-flight cap 20,000, rate limit 1,000 per second, no simulated activity delay. Run B: default limits (cap 2,000, 200 per second) with 10 ms per simulated activity. Same laptop, same code; only <code>DISPATCH_MODE</code> changed.</p>
+  <div class="prose">
+    <p>Look at the last row of the first run: 117 seconds for the loop, 115 for Flow. All that faster dispatching saved two seconds end to end. The second run, with the default limits and slower simulated activities, is even plainer: both options settled at about 85 starts per second.</p>
+    <p class="analogy">Back to the restaurant. A faster host fills empty tables sooner, but once every table is taken, new guests wait for someone to leave. The seating rate then equals the number of tables divided by how long each meal lasts. That's Little's law. In the second run the cap was 2,000 open workflows and each stayed open for about 24 seconds (the workers were busy), so neither option could seat more than about 83 a second. The host was never the bottleneck; the kitchen was.</p>
+    <p>This is the honest limit of reactive streams here. Flow's backpressure reacts to one thing: how long a start call takes. When Temporal slows down, the eight slots stay busy and claiming slows by itself, which is exactly what we want. But Flow can't see how many workflows are open, or how hot Aurora's CPU is running. The in-flight cap sees the first. A future load governor will watch the second.</p>
+    <p><strong class="rule">Flow's backpressure protects the dispatcher. The in-flight cap protects Aurora.</strong></p>
+    <p>Here is the same idea stage by stage, from a new row to an open workflow.</p>
+  </div>
+  <div class="card tscroll"><table class="bp">
+    <thead><tr><th>Stage</th><th>Option 1 · plain loop</th><th>Option 2 · Kotlin Flow</th></tr></thead>
+    <tbody>
+      <tr><td class="layer">New-event signal</td><td>A timer only, so there is nothing to overflow.</td><td>NOTIFY pushes without backpressure. Each type's ring flow uses <code>conflate()</code> and triggers at most once every 2 s. Extra rings carry no news, so dropping them loses nothing.</td></tr>
+      <tr><td class="layer">Claiming rows</td><td>Each batch claims at most <code>maxInflight − in-flight</code> rows.</td><td>The same query, but the next batch is claimed only when <code>emit</code> returns, which means downstream has room.</td></tr>
       <tr><td class="layer">Starting workflows</td><td>One call at a time: throughput ≤ 1 ÷ latency.</td><td><code>flatMapMerge(n)</code> keeps up to n calls in flight: throughput ≤ n ÷ latency.</td></tr>
-      <tr><td class="layer">Rate limit</td><td>Token bucket that blocks the thread.</td><td>Token bucket that suspends, so no thread is held while waiting.</td></tr>
+      <tr><td class="layer">Rate limit</td><td>A token bucket that blocks the thread.</td><td>A token bucket that suspends, so no thread is held while waiting.</td></tr>
       <tr><td class="layer">Temporal slows down</td><td>Each call takes longer, so the loop slows on its own.</td><td>All n slots stay busy, demand drops and claiming slows on its own, with n times the headroom.</td></tr>
       <tr><td class="layer">Memory</td><td>One batch.</td><td>n calls in flight plus a small bounded buffer.</td></tr>
-      <tr><td class="layer">Open workflows and Aurora load</td><td>In-flight cap plus the future governor.</td><td>Same in-flight cap and governor. Reactive backpressure doesn't reach this far.</td></tr>
+      <tr><td class="layer">Open workflows and Aurora load</td><td>The in-flight cap, and later the governor.</td><td>The same cap and governor. Flow's backpressure doesn't reach this far.</td></tr>
     </tbody></table></div>
-  <p class="callout"><b>Reactive backpressure works between stages inside one process.</b> It reacts to how long each start call takes. It can't see how many workflows are open in Temporal or how busy Aurora is. In both options, that's the job of the in-flight cap and, later, the governor.</p>
+  <div class="prose"><p>If you'd like to see where your own numbers land, move the sliders. Each bar shows starts per second, and the note under it names the limit that wins.</p></div>
 
   <div class="card sim" id="sim">
     <div class="ctrls">
@@ -344,98 +453,99 @@ svg.arch text{font-family:var(--font)}
       <label for="s-burst"><span>Burst size</span><span class="row"><input type="range" id="s-burst" min="1000" max="100000" step="1000" value="10000"><output id="o-burst"></output></span></label>
     </div>
     <div class="res">
-      <div class="rrow r1"><div class="rtop"><span>Option 1 · without reactive</span><b id="t1"></b></div><div class="bar"><span id="b1"></span></div><div class="bind" id="n1"></div></div>
-      <div class="rrow r2"><div class="rtop"><span>Option 2 · with reactive</span><b id="t2"></b></div><div class="bar"><span id="b2"></span></div><div class="bind" id="n2"></div></div>
+      <div class="rrow r1"><div class="rtop"><span>Option 1 · plain loop</span><b id="t1"></b></div><div class="bar"><span id="b1"></span></div><div class="bind" id="n1"></div></div>
+      <div class="rrow r2"><div class="rtop"><span>Option 2 · Kotlin Flow</span><b id="t2"></b></div><div class="bar"><span id="b2"></span></div><div class="bind" id="n2"></div></div>
       <div class="facts">
         <div><span>Burst drains · Option 1</span><b id="d1"></b></div>
         <div><span>Burst drains · Option 2</span><b id="d2"></b></div>
         <div><span>First pickup · Option 1</span><b>up to 1 interval</b></div>
-        <div><span>First pickup · Option 2</span><b>~2–5 s</b></div>
+        <div><span>First pickup · Option 2</span><b>under a second</b></div>
       </div>
       <p class="formula">Starts per second = min(rate limit, parallel calls ÷ latency, maxInflight ÷ workflow duration). The last term is Little's law: open workflows = start rate × duration.</p>
     </div>
   </div>
+  <div class="prose"><p>With real numbers and their limits in hand, we can weigh the two options fairly.</p></div>
 </section>
 
-<section id="measured">
-  <h2><span class="hnum">3</span>Measured in the PoC</h2>
-  <p class="sec-sub">5,000 <code>INBOUND_PAYMENT</code> rows inserted at once, on a laptop running Docker (events Postgres, Temporal 1.29 on its own Postgres). Same code and limits for both options; only <code>DISPATCH_MODE</code> changed.</p>
-  <div class="card tscroll"><table class="bp">
-    <thead><tr><th>Run A · dispatcher-bound</th><th>Option 1 · without reactive</th><th>Option 2 · with reactive</th></tr></thead>
-    <tbody>
-      <tr><td class="layer">First pickup after insert</td><td>1.6 s, because the insert landed 1 s before a tick. Expect up to 60 s.</td><td>0.4 s, from the doorbell</td></tr>
-      <tr><td class="layer">Start rate</td><td>123 starts/s, one call at a time</td><td>340 starts/s, 8 calls in flight (2.8×)</td></tr>
-      <tr><td class="layer">All 5,000 started</td><td>40.6 s</td><td>14.7 s</td></tr>
-      <tr><td class="layer">All 5,000 finished</td><td>117 s</td><td>115 s</td></tr>
-    </tbody></table></div>
-  <div class="card tscroll"><table class="bp">
-    <thead><tr><th>Run B · worker-bound</th><th>Option 1 · without reactive</th><th>Option 2 · with reactive</th></tr></thead>
-    <tbody>
-      <tr><td class="layer">First pickup after insert</td><td>57 s, waiting for the next tick</td><td>42 s. The doorbell wasn't connected in this run (a missing SCRAM library, since fixed), so dispatch fell back to ticks.</td></tr>
-      <tr><td class="layer">Start rate</td><td>≈ 85/s, held by the in-flight cap</td><td>≈ 83/s, held by the in-flight cap</td></tr>
-      <tr><td class="layer">All 5,000 finished</td><td>172 s</td><td>157 s</td></tr>
-    </tbody></table></div>
-  <p class="muted" style="font-size:.88rem">Run A: in-flight cap 20,000, rate limit 1,000/s, no simulated activity delay. Run B: default limits (in-flight cap 2,000, 200/s) with 10 ms per simulated activity.</p>
-  <div class="card why" style="grid-template-columns:1fr"><ul>
-    <li><b>Parallel starts pay off only when the start call is the bottleneck.</b> In Run A they started the burst 2.8× faster.</li>
-    <li><b>Neither option makes Temporal run workflows faster.</b> When the workers set the pace (Run B), both settle at the in-flight cap's rate, as Little's law predicts: about 80 starts/s for 2,000 open workflows that each take about 25 s. End-to-end drain time was set by the workers in both runs.</li>
-    <li><b>The doorbell held up.</b> 5 insert statements produced 5 rings and 2 triggers. With <code>PAYMENT_RETURNED</code> paused, its 200 rows stayed NEW and the doorbell skipped the ring. After resume, all 201 completed within 10 s.</li>
-    <li><b>Run B also showed the fallback working.</b> With the listener down, Option 2 behaved like Option 1 and nothing was lost.</li>
-  </ul></div>
-</section>
-
-<section id="score">
-  <h2><span class="hnum">4</span>Scorecard</h2>
-  <p class="sec-sub">Scores run from 1 to 5 and are my judgment for this workload. Change the weights to see how the result moves.</p>
+<section id="weigh">
+  <h2><span class="hnum">5</span>Weighing the two options</h2>
+  <div class="prose"><p>Here is everything we've learned so far, laid side by side.</p></div>
+  <div class="duo">
+    <div class="card opt o1">
+      <div class="opt-head"><div><div class="olabel">Option 1</div><h3>Schedules with a plain loop</h3></div><span class="tag no">Simpler</span></div>
+      <div class="flow"><span>Schedule tick (30s–5m)</span><em>→</em><span>DispatcherWorkflow</span><em>→</em><span>claim ≤ capacity</span><em>→</em><span>start one at a time</span><em>→</em><span>mark STARTED</span></div>
+      <div class="pc pros"><h4>Pros</h4><ul>
+        <li>Fewest moving parts: a schedule, one activity and a status table.</li>
+        <li>A plain loop that's easy to read, test and debug.</li>
+        <li>Backpressure by design: it pulls only what capacity allows, one start at a time.</li>
+        <li>Works the same on Postgres and Oracle.</li></ul></div>
+      <div class="pc cons"><h4>Cons</h4><ul>
+        <li>Pickup waits up to one interval (57 s in our run).</li>
+        <li>Sequential starts: 123 per second in our run.</li>
+        <li>A burst waits for the next tick even when Temporal is idle.</li></ul></div>
+    </div>
+    <div class="card opt o2">
+      <div class="opt-head"><div><div class="olabel">Option 2</div><h3>Schedules with Kotlin Flow</h3></div><span class="tag ok">Recommended</span></div>
+      <div class="flow"><span class="rx">INSERT → pg_notify</span><em>→</em><span class="rx">LISTEN as a Flow</span><em>→</em><span class="rx">conflate()</span><em>→</em><span>schedule.trigger()</span><em>→</em><span class="rx">claim → flatMapMerge(8) start</span></div>
+      <div class="pc pros"><h4>Pros</h4><ul>
+        <li>Pickup in under a second for types with the doorbell on (0.4 s in our run).</li>
+        <li>Bounded parallel starts: 340 per second in our run, still capped by the rate limit.</li>
+        <li>Demand-driven claiming, built into Flow: the next batch waits for room.</li>
+        <li>Slows down by itself when Temporal's response time rises.</li>
+        <li>If the listener stops, interval ticks drain the table exactly as in Option 1.</li></ul></div>
+      <div class="pc cons"><h4>Cons</h4><ul>
+        <li>More code to own: a LISTEN connection, reconnects, conflation and coroutines inside a blocking activity.</li>
+        <li>Push works only on Postgres. Oracle sources get the Flow pipeline but no doorbell.</li>
+        <li>Manual triggers need their own pause check.</li>
+        <li>Concurrency is harder to test and to reason about.</li>
+        <li>NOTIFY takes a lock at commit, so keep the doorbell off for very busy event types.</li></ul></div>
+    </div>
+  </div>
+  <div class="prose"><p>Lists like these hide how much each point matters to you, so the scorecard below lets you set the weights yourself. The defaults lean on what this design must do well: latency, throughput, pause and resume, and staying easy to maintain.</p></div>
   <div class="card weights" id="weights"></div>
   <div class="card tscroll"><table class="score" id="scoreTable"></table></div>
   <p class="bestline" id="bestLine"></p>
+  <div class="prose">
+    <p>With the default weights the two options land within a point of each other, and I'd be suspicious of any comparison that pretended otherwise. The points that differ, though, are the ones payments feel: how long an inbound credit waits, and how quickly a month-end burst clears.</p>
+    <p>You may be thinking, "If they score the same, pick the simpler one." That's a sound instinct, and often the right call. Here, though, Option 2 contains Option 1: switch its doorbell off and it behaves exactly like the loop. So the real question is asked per event type: is the faster pickup worth a listener? For inbound payments and returns, I think it is. For settlements that arrive in clearing batches, it isn't.</p>
+    <p>So the recommendation is <strong>Option 2, Temporal Schedules with Kotlin Flow</strong>, with the doorbell on for <code>INBOUND_PAYMENT</code> and <code>PAYMENT_RETURNED</code> and off for the rest. Option 1 is still the better choice when:</p>
+    <ul>
+      <li>every event type's latency target is at least its schedule interval,</li>
+      <li>peak volume per type stays under roughly 1 ÷ start latency (about 120 per second in our run),</li>
+      <li>the team wants the smallest surface to own and isn't comfortable with coroutines yet, or</li>
+      <li>the source is Oracle only, so the doorbell can't be used.</li>
+    </ul>
+    <p>Let's see how the PoC puts all of these pieces together.</p>
+  </div>
 </section>
 
 <section id="design">
-  <h2><span class="hnum">5</span>PoC architecture</h2>
-  <p class="sec-sub">Switch between the options, pick a scenario, and click any box for details, including each event's sample payload.</p>
+  <h2><span class="hnum">6</span>The PoC, piece by piece</h2>
+  <div class="prose"><p>Pick an option and a scenario, then click any box. The left panel walks through what happens, step by step. The right panel explains the box you clicked, including each event type's sample payload.</p></div>
   <div class="card dg">
     <div class="bar-ctl">
-      <div><div class="lbl">Option</div><div class="seg" id="modeSeg"><button type="button" class="m1" data-m="opt1">1 · without reactive</button><button type="button" data-m="opt2">2 · with reactive</button></div></div>
+      <div><div class="lbl">Option</div><div class="seg" id="modeSeg"><button type="button" class="m1" data-m="opt1">1 · plain loop</button><button type="button" data-m="opt2">2 · Kotlin Flow</button></div></div>
       <div style="min-width:0"><div class="lbl">Scenario</div><div class="scens" id="scens"></div></div>
     </div>
     <p class="hint">Scroll sideways to see the whole diagram.</p>
     <div class="dg-scroll"><svg class="arch" id="arch" viewBox="0 0 1012 888" role="img" aria-label="PoC architecture: control plane, one pipeline per payment event type, and the Temporal platform"></svg></div>
     <div class="dg-info"><div class="panel" id="steps"></div><div class="panel" id="detail"></div></div>
   </div>
-</section>
-
-<section id="why">
-  <h2><span class="hnum">6</span>Decision</h2>
-  <div class="card why">
-    <div><h3>Why Option 2</h3><ul>
-      <li><b>Latency where it matters:</b> inbound credits and returns get picked up in seconds. Future-dated and settled events don't need it, so their doorbell stays off.</li>
-      <li><b>Bursts:</b> month-end or a clearing file can land thousands of rows at once. Parallel starts with a cap drain them in seconds instead of minutes.</li>
-      <li><b>Self-limiting:</b> when Temporal slows, the pipeline slows with it. It never has more than n calls in flight per dispatcher.</li>
-      <li><b>No new failure mode for correctness:</b> the table stays the source of truth. A lost ring costs at most one interval of delay.</li>
-      <li><b>Same ops model:</b> the same schedules, pause/resume, <code>dispatch_config</code> limits and governor.</li></ul></div>
-    <div><h3>Choose Option 1 instead if</h3><ul>
-      <li>Every event type's latency target is at least its schedule interval.</li>
-      <li>Peak volume per type stays under about 1 ÷ start latency (roughly 50/s).</li>
-      <li>The team wants the smallest surface to own and isn't comfortable with coroutines yet.</li>
-      <li>The source is Oracle only, so the doorbell can't be used.</li></ul>
-      <p class="muted" style="margin-top:10px;font-size:.92rem">Both run from one codebase, so you can start with Option 1 and turn on reactive per event type later.</p></div>
-  </div>
+  <div class="prose"><p>Reading about it only goes so far. Let's run it.</p></div>
 </section>
 
 <section id="poc">
-  <h2><span class="hnum">7</span>Run the PoC</h2>
+  <h2><span class="hnum">7</span>Run it on your laptop</h2>
   <div class="poc">
     <div class="card"><h3>What's in the repo</h3><ul>
-      <li>Quarkus + Kotlin app with Exposed on Postgres, Flyway migrations and the Temporal Java SDK.</li>
+      <li>A Quarkus and Kotlin app with Exposed on Postgres, Flyway migrations and the Temporal Java SDK.</li>
       <li>One generic <code>DispatcherWorkflow</code> and one Temporal Schedule per event type.</li>
-      <li>Two dispatch engines: <code>PollingDispatchEngine</code> and <code>ReactiveDispatchEngine</code>.</li>
-      <li><code>Doorbell</code>: Vert.x <code>PgSubscriber</code> → Kotlin Flow → <code>schedule.trigger()</code>.</li>
-      <li>Five business workflows with realistic payloads and a sample-data generator.</li>
-      <li>Admin API: stats, pause/resume, live limits.</li>
-      <li>Docker Compose: events Postgres, a second Postgres standing in for Temporal's Aurora, Temporal and its UI.</li></ul></div>
-    <div class="card"><h3>Run it</h3>
+      <li>Two dispatch engines, <code>PollingDispatchEngine</code> and <code>ReactiveDispatchEngine</code>, chosen with <code>DISPATCH_MODE</code>.</li>
+      <li><code>Doorbell</code>: JDBC <code>LISTEN</code> as a cold Kotlin Flow, shared with <code>shareIn</code> and conflated per type.</li>
+      <li>Five business workflows with realistic payloads, plus a sample-data generator.</li>
+      <li>An admin API for stats, pause and resume, and live limits.</li>
+      <li>26 tests, including real Postgres through Quarkus Dev Services.</li></ul></div>
+    <div class="card"><h3>Commands</h3>
       <div class="code"><div class="code-head">terminal</div><pre><span class="c"># infra: Postgres ×2, Temporal, Temporal UI (localhost:8233)</span>
 docker compose up -d
 
@@ -443,12 +553,21 @@ docker compose up -d
 ./gradlew quarkusDev
 DISPATCH_MODE=reactive ./gradlew quarkusDev
 
-<span class="c"># insert a burst and time it (first pickup / all started / all finished)</span>
+<span class="c"># the 9:02 burst, timed: first pickup / all started / all finished</span>
 python3 scripts/watch_stats.py --generate INBOUND_PAYMENT:5000
 
 <span class="c"># ops levers</span>
 curl localhost:8080/admin/stats
 curl -X POST 'localhost:8080/admin/schedules/INBOUND_PAYMENT/pause?note=incident'</pre></div></div>
+  </div>
+</section>
+
+<section id="closing">
+  <h2>Back to Monday morning</h2>
+  <div class="prose">
+    <p>We started with a loop that started everything at once, like a host sending every guest into the kitchen together. A cap and a lease turned it into a polite loop. Kotlin Flow then gave us a doorbell and parallel starts: 2.8 times faster to start a burst, and a useful reminder that faster seating doesn't cook the meals any quicker.</p>
+    <p>Before you close this page, search your own code for a call to <code>WorkflowClient.start</code> inside a loop over query results. If there's no cap and no <code>SKIP LOCKED</code> nearby, you may have just found next Monday's incident.</p>
+    <p>Next, we'll build the load governor: a small scheduled workflow that watches Temporal and Aurora, and presses the pause button before anyone has to.</p>
   </div>
 </section>
 
@@ -494,7 +613,7 @@ function pips(n){let s='<span class="pips" aria-label="'+n+' of 5">';for(let i=0
 function score(){
   const max=CRIT.reduce((s,c)=>s+c.w*5,0)||1,ta=CRIT.reduce((s,c)=>s+c.w*c.a[0],0),tb=CRIT.reduce((s,c)=>s+c.w*c.b[0],0);
   const pa=Math.round(ta/max*100),pb=Math.round(tb/max*100);
-  $('scoreTable').innerHTML=`<thead><tr><th>Criterion</th><th>Option 1 · without reactive</th><th>Option 2 · with reactive</th></tr></thead><tbody>${
+  $('scoreTable').innerHTML=`<thead><tr><th>Criterion</th><th>Option 1 · plain loop</th><th>Option 2 · Kotlin Flow</th></tr></thead><tbody>${
    CRIT.map(c=>`<tr><td class="layer">${c.n}</td><td class="c1"><div class="cell">${pips(c.a[0])}<span>${esc(c.a[1])}</span></div></td><td class="c2"><div class="cell">${pips(c.b[0])}<span>${esc(c.b[1])}</span></div></td></tr>`).join('')}
    <tr class="tot"><td>Weighted fit</td><td class="c1"><div class="total"><div class="bar"><span style="width:${pa}%"></span></div><b>${pa}%</b></div></td><td class="c2"><div class="total"><div class="bar"><span style="width:${pb}%"></span></div><b>${pb}%</b></div></td></tr></tbody>`;
   $('bestLine').innerHTML=pa===pb?'<b>A tie at these weights.</b> The choice comes down to whether latency and bursts matter for each event type.':
@@ -529,7 +648,7 @@ const ROWS=[
   wfSteps:['Reconcile against the expected amount and fee','Release the funds hold','Close the payment','Arrives in clearing-file batches, so a 5-minute interval is enough']}];
 const Y0=232,STEP=98;ROWS.forEach((r,i)=>r.y=Y0+i*STEP);
 const NODES=[
- {id:'door',x:28,y:46,w:210,h:64,t:'Doorbell',s:'PgSubscriber → Flow',ph:'blue'},
+ {id:'door',x:28,y:46,w:210,h:64,t:'Doorbell',s:'LISTEN → Kotlin Flow',ph:'blue'},
  {id:'ops',x:318,y:46,w:164,h:64,t:'Ops controls',s:'UI · CLI · REST',ph:'violet'},
  {id:'cfg',x:494,y:46,w:164,h:64,t:'dispatch_config',s:'limits per type',ph:'violet'},
  {id:'gov',x:738,y:46,w:220,h:64,t:'Load governor',s:'future · runs every 30s',ph:'violet',dashed:true},
@@ -574,7 +693,7 @@ let mode='opt2',cur='normal';
 const rowById=id=>{const m=id.match(/(\d)$/);return m&&/^(src|sch|dsp|wf)/.test(id)?ROWS[+m[1]-1]:null};
 function D(id){
   const r=rowById(id),o2=mode==='opt2';
-  if(id==='door')return ['Option 2 only · reactive','Doorbell',['A Vert.x <code>PgSubscriber</code> on a dedicated connection listens on the <code>payment_events</code> channel. A statement trigger sends the event type as the payload.','Each ring goes into a conflated Kotlin Flow per event type. The first ring triggers right away, and the rest fold into at most one trigger every 2 seconds.','It skips paused schedules, then calls <code>trigger(BUFFER_ONE)</code>, so a ring that arrives during a running dispatch queues exactly one follow-up run.','On for INBOUND_PAYMENT and PAYMENT_RETURNED only. Its reconnect policy re-subscribes after a drop, and interval ticks cover the gap.'+(o2?'':' <b>Not used in Option 1.</b>')]];
+  if(id==='door')return ['Option 2 only · Kotlin Flow','Doorbell',['A dedicated JDBC connection runs <code>LISTEN payment_events</code> inside a cold <code>flow { }</code>. A statement trigger sends the event type as the payload.','<code>retryWhen</code> reconnects after a drop, and <code>shareIn</code> lets that one connection feed every event type.','Each type runs <code>filter</code> then <code>conflate()</code>: the first ring triggers right away, and further rings fold into at most one trigger every 2 seconds.','It skips paused schedules, then calls <code>trigger(BUFFER_ONE)</code>, so a ring during a running dispatch queues exactly one follow-up run.','On for INBOUND_PAYMENT and PAYMENT_RETURNED only. If it stops, interval ticks still drain the table.'+(o2?'':' <b>Not used in Option 1.</b>')]];
   if(id==='ops')return ['Control plane · manual','Ops controls',['Pause or resume one event type from the Temporal UI, <code>temporal schedule toggle</code>, or <code>POST /admin/schedules/{type}/pause</code>.','Every pause carries a note (who and why) that shows in the UI.','Pausing stops new dispatch only. Running workflows finish.']];
   if(id==='cfg')return ['Control plane · runtime limits','dispatch_config table',['One row per event type: <code>batch_size</code>, <code>max_inflight</code>, <code>starts_per_second</code>, <code>parallelism</code>, <code>time_budget_seconds</code>, <code>enabled</code>.','The dispatcher reads it at the start of every run, so <code>PUT /admin/limits/{type}</code> applies without a redeploy.','The future governor throttles by writing here.']];
   if(id==='gov')return ['Control plane · future','Load governor',['Runs on its own schedule every 30s and never pauses itself.','Inputs: Temporal persistence latency, schedule-to-start latency, Aurora CPU and commit latency.','Level 1 lowers the limits. Level 2 pauses schedules, priority 3 first, then 2.','Waits for load to stay healthy for a set time before undoing anything (hysteresis), so it doesn\'t flip back and forth.']];

@@ -5,9 +5,9 @@ A proof of concept for turning payment events stored in Postgres into Temporal w
 | `DISPATCH_MODE` | Option | What runs |
 |---|---|---|
 | `polling` (default) | 1 · Temporal Schedules **without** reactive streams | One Temporal Schedule per event type starts a generic `DispatcherWorkflow`, whose activity claims rows and starts workflows one at a time. |
-| `reactive` | 2 · Temporal Schedules **with** reactive streams | Same schedules and dispatcher. Adds a Postgres `NOTIFY` doorbell (Vert.x `PgSubscriber` → Kotlin Flow → `schedule.trigger()`) and runs the claim-and-start loop as a Flow pipeline with bounded parallel starts. |
+| `reactive` | 2 · Temporal Schedules **with** reactive streams, built with Kotlin Flow | Same schedules and dispatcher. Adds a Postgres `NOTIFY` doorbell (JDBC `LISTEN` as a cold Kotlin Flow → `shareIn` → per-type `conflate()` → `schedule.trigger()`) and runs the claim-and-start loop as a Flow pipeline with bounded parallel starts. No Reactor, RxJava or Vert.x: only `kotlinx.coroutines`. |
 
-**Comparison page:** [`docs/index.html`](docs/index.html), published to GitHub Pages by `.github/workflows/pages.yml`. It covers both options, where each applies backpressure, a throughput simulator, a weighted scorecard and an interactive diagram.
+**Comparison page:** [`docs/index.html`](docs/index.html), published to GitHub Pages by `.github/workflows/pages.yml`. It walks through the naive loop, Option 1 and Option 2 with measured numbers, then covers backpressure, a throughput simulator, a weighted scorecard and an interactive diagram.
 
 **Stack:** Kotlin 2.4 · Quarkus 3.40 · Postgres 17 · Exposed 1.6 · Temporal Java SDK 1.41 · kotlinx.coroutines 1.11
 
@@ -24,7 +24,7 @@ flowchart LR
         D[DispatcherWorkflow]
         W[5 business workflows<br/>one task queue each]
     end
-    T -- "NOTIFY (option 2)" --> B[Doorbell<br/>PgSubscriber → Flow]
+    T -- "NOTIFY (option 2)" --> B[Doorbell<br/>LISTEN as a Kotlin Flow]
     B -- "trigger(BUFFER_ONE)" --> S1
     S1 -- "every 30s–5m" --> D
     D -- "claim ≤ capacity<br/>FOR UPDATE SKIP LOCKED" --> T
@@ -119,7 +119,7 @@ Temporal UI: <http://localhost:8233> (schedules `dispatch-*`, dispatcher runs, b
 | Start rate | ≈ 85/s (in-flight cap) | ≈ 83/s (in-flight cap) |
 | All finished | 172 s | 157 s |
 
-Parallel starts help when the start call is the bottleneck. When workflows themselves are the bottleneck, both options settle at the in-flight cap's rate. In run B the doorbell had not connected (a missing SCRAM library, since fixed), so option 2 fell back to interval ticks and lost nothing.
+Parallel starts help when the start call is the bottleneck. When workflows themselves are the bottleneck, both options settle at the in-flight cap's rate. In run B an earlier build of the doorbell (a Vert.x client missing a SCRAM library) had not connected, so option 2 fell back to interval ticks and lost nothing. The doorbell is now plain JDBC inside a Kotlin Flow: with default limits it picked up 2,000 inbound payments 0.3 s after the insert and started them all in 10.5 s, exactly the 200/s rate limit.
 
 ## Tests
 
@@ -130,6 +130,7 @@ Parallel starts help when the start call is the bottleneck. When workflows thems
 - `DispatchEngineTest`: one behaviour checklist run against both engines (in-flight cap, duplicates, releasing claimed rows after a failure, time budget), plus checks specific to the reactive engine (bounded concurrency, demand-driven claiming, speed-up).
 - `PaymentWorkflowsTest`: workflow logic on Temporal's time-skipping test server, including a 3-day durable timer.
 - `PaymentEventRepositoryTest`: `SKIP LOCKED`, leases, `available_at` and JSONB against real Postgres via Quarkus Dev Services (needs Docker).
+- `PgNotificationsTest`: an insert fires the table trigger, and the doorbell's Kotlin Flow receives the event type.
 
 ## Project layout
 
@@ -138,7 +139,7 @@ src/main/kotlin/com/payments/dispatch/
   config/      AppConfig (@ConfigMapping), Temporal + Exposed producers, WorkerSetup
   events/      EventType, payloads, Exposed tables, repository, sample generator
   dispatch/    DispatcherWorkflow, Polling/ReactiveDispatchEngine, TokenBucket, ScheduleSyncer, reaper
-  doorbell/    Doorbell (option 2: NOTIFY → Flow → schedule trigger)
+  doorbell/    pgNotifications (LISTEN as a cold Flow) and Doorbell (shareIn → conflate → schedule trigger)
   workflows/   five business workflows + activities
   api/         /events (load generator) and /admin (stats, pause/resume, limits)
 src/main/resources/db/migration/V1__payment_events.sql   tables, partial indexes, NOTIFY trigger

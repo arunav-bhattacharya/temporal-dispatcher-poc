@@ -9,9 +9,6 @@ import io.quarkus.runtime.ShutdownEvent
 import io.quarkus.runtime.StartupEvent
 import io.temporal.api.enums.v1.ScheduleOverlapPolicy
 import io.temporal.client.schedules.ScheduleClient
-import io.vertx.core.Vertx
-import io.vertx.pgclient.PgConnectOptions
-import io.vertx.pgclient.pubsub.PgSubscriber
 import jakarta.annotation.Priority
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.enterprise.event.Observes
@@ -19,72 +16,98 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.flow.shareIn
+import org.postgresql.PGConnection
+import java.sql.DriverManager
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.min
 
 private val log = KotlinLogging.logger {}
 
 /**
- * Option 2 only. Turns Postgres NOTIFY into Temporal Schedule triggers.
+ * Postgres LISTEN as a cold Kotlin Flow of notification payloads.
+ * A dedicated JDBC connection (never a pooled one) waits up to a second at a time for news,
+ * so cancellation is noticed within a second. Each collector opens its own connection.
+ */
+fun pgNotifications(jdbcUrl: String, user: String, password: String, channel: String): Flow<String> = flow {
+    DriverManager.getConnection(jdbcUrl, user, password).use { conn ->
+        conn.createStatement().use { it.execute("LISTEN $channel") }
+        log.info { "Doorbell listening on '$channel'" }
+        val pg = conn.unwrap(PGConnection::class.java)
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            pg.getNotifications(1_000)?.forEach { emit(it.parameter) }
+        }
+    }
+}.flowOn(Dispatchers.IO)
+
+/**
+ * Option 2 only. Turns Postgres NOTIFY into Temporal Schedule triggers, built entirely with Kotlin Flow:
  *
- *   INSERT ─trigger─▶ pg_notify('payment_events', type) ─▶ PgSubscriber ─▶ ring flow (conflated)
- *        ─▶ at most one trigger(BUFFER_ONE) per type every min-gap ─▶ DispatcherWorkflow
+ *   pgNotifications ─retryWhen─▶ mapNotNull(EventType) ─shareIn─▶ per type: filter ─▶ conflate ─▶ trigger, wait 2s
  *
- * NOTIFY has no backpressure, so each type's ring flow keeps only the latest ring
- * (buffer 1, DROP_OLDEST). A ring only means "look at the table": dropping extras loses nothing,
- * and if the listener is down the schedule's interval ticks still drain the table.
+ * NOTIFY has no backpressure, so each type conflates: while a trigger is in progress (or in its 2s gap),
+ * extra rings collapse into one. A ring only means "look at the table", so dropping extras loses
+ * nothing, and if the listener is down the schedule's interval ticks still drain the table.
  */
 @ApplicationScoped
 class Doorbell(
     private val config: AppConfig,
-    private val vertx: Vertx,
     private val schedules: ScheduleClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val rings = ConcurrentHashMap<EventType, MutableSharedFlow<Unit>>()
     private val pausedCache = ConcurrentHashMap<EventType, Pair<Long, Boolean>>()
-    private var subscriber: PgSubscriber? = null
 
     val ringsReceived = AtomicLong()
     val triggersSent = AtomicLong()
     val skippedPaused = AtomicLong()
 
-    val enabledTypes: Set<EventType> get() = rings.keys
+    /** Event types with the doorbell on (empty in polling mode). Set once at startup. */
+    @Volatile
+    var enabledTypes: Set<EventType> = emptySet()
 
     fun onStart(@Observes @Priority(30) event: StartupEvent) {
         if (config.dispatchMode() != DispatchMode.REACTIVE) return
-        val types = config.events().filterValues { it.doorbell() }.keys.map(EventType::valueOf)
-        val minGap = config.doorbell().minGap().toMillis()
+        val db = config.doorbell()
+        val types = config.events().filterValues { it.doorbell() }.keys.map(EventType::valueOf).toSet()
+        val minGap = db.minGap().toMillis()
+        val jdbcUrl = "jdbc:postgresql://${db.host()}:${db.port()}/${db.database()}"
+
+        // One LISTEN connection, shared hot across all event types.
+        val rings = pgNotifications(jdbcUrl, db.user(), db.password(), db.channel())
+            .retryWhen { cause, attempt ->
+                log.warn { "Doorbell connection lost (${cause.message}); interval ticks still dispatch. Reconnecting." }
+                delay(min(1_000L * (attempt + 1), 30_000L))
+                true
+            }
+            .onEach { ringsReceived.incrementAndGet() }
+            .mapNotNull { payload -> EventType.entries.firstOrNull { it.name == payload } }
+            .shareIn(scope, SharingStarted.Eagerly)
 
         types.forEach { type ->
-            val flow = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-            rings[type] = flow
-            scope.launch {
-                flow.collect {
+            rings.filter { it == type }
+                .conflate() // ten rings while we're busy still mean one trip to the door
+                .onEach {
                     ring(type)
-                    delay(minGap) // leading-edge throttle: first ring triggers now, the rest fold into one
+                    delay(minGap) // leading-edge throttle: the first ring triggers now
                 }
-            }
+                .launchIn(scope)
         }
-
-        val db = config.doorbell()
-        val options = PgConnectOptions()
-            .setHost(db.host()).setPort(db.port()).setDatabase(db.database())
-            .setUser(db.user()).setPassword(db.password())
-        val sub = PgSubscriber.subscriber(vertx, options)
-            .reconnectPolicy { retries -> if (retries < 10_000) 1_000L else -1L }
-        sub.channel(db.channel()).handler { payload ->
-            ringsReceived.incrementAndGet()
-            runCatching { EventType.valueOf(payload) }.getOrNull()?.let { rings[it]?.tryEmit(Unit) }
-        }
-        sub.connect()
-            .onSuccess { log.info { "Doorbell listening on '${db.channel()}' for $types" } }
-            .onFailure { log.warn(it) { "Doorbell could not connect; interval ticks still dispatch" } }
-        subscriber = sub
+        enabledTypes = types
     }
 
     private fun ring(type: EventType) {
@@ -117,7 +140,6 @@ class Doorbell(
     }
 
     fun onStop(@Observes event: ShutdownEvent) {
-        subscriber?.close()
         scope.cancel()
     }
 }

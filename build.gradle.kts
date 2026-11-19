@@ -23,13 +23,11 @@ dependencies {
     implementation("io.quarkus:quarkus-rest-jackson")
     implementation("io.quarkus:quarkus-smallrye-health")
 
-    // Postgres: JDBC pool for Exposed, Flyway for schema, Vert.x client for LISTEN/NOTIFY (option 2)
+    // Postgres: JDBC pool for Exposed, Flyway for schema; option 2 LISTENs over plain JDBC as a Kotlin Flow
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-agroal")
     implementation("io.quarkus:quarkus-flyway")
     implementation("org.flywaydb:flyway-database-postgresql")
-    implementation("io.vertx:vertx-pg-client")
-    implementation("com.ongres.scram:scram-client") // SCRAM-SHA-256 auth for the Vert.x LISTEN connection
 
     // Exposed
     implementation("org.jetbrains.exposed:exposed-core:$exposedVersion")
