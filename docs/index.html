@@ -256,6 +256,47 @@ svg.arch text{font-family:var(--font)}
 .rule{color:var(--title);font-size:1.08rem}
 .cap{font-size:.86rem;color:var(--mut);margin:0}
 section>.code{margin-top:0}
+
+/* flow diagrams (one per option) */
+.fd{padding:16px;display:flex;flex-direction:column;gap:12px}
+.fd-top{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:flex-end}
+.fd-top h3{font-size:1.05rem}
+.fd-ctrls{display:flex;flex-wrap:wrap;gap:8px}
+.fd-ctrls button{font:inherit;font-size:.84rem;cursor:pointer;border:1px solid var(--line);background:var(--card-solid);color:var(--txt);border-radius:99px;padding:5px 12px}
+.fd-ctrls button:hover{border-color:var(--accent)}
+.fd-ctrls button[aria-pressed="true"]{background:var(--tint);border-color:var(--accent);color:var(--title)}
+.fd-hint{font-size:.86rem;color:var(--mut)}
+svg.fdsvg{display:block;width:100%;min-width:880px;height:auto}
+.fdsvg text{font-family:var(--font);pointer-events:none}
+.fdsvg .t{font-size:11.5px;font-weight:600;fill:var(--txt)}
+.fdsvg .s{font-size:11px;fill:var(--mut)}
+.fdsvg .s2{font-size:10px;fill:var(--mut)}
+.fdsvg .bt{font-size:12px;font-weight:650;fill:var(--title)}
+.fdsvg .clk{font-size:20px;font-weight:650;fill:var(--title);font-variant-numeric:tabular-nums}
+.fdsvg .nb{fill:var(--node);stroke:var(--line);stroke-width:1.2}
+.fdsvg .band{fill:var(--band)}
+.fdsvg .bl{stroke:var(--line)}
+.fbox,.frow,.chip-s{cursor:pointer}
+.fbox:focus,.frow:focus,.chip-s:focus{outline:none}
+.fbox.sel .nb,.fbox:focus-visible .nb{stroke:var(--accent);stroke-width:2}
+.rowbg{fill:var(--band);stroke:var(--line);stroke-width:.8}
+.frow.sel .rowbg,.frow:focus-visible .rowbg{stroke:var(--accent);stroke-width:1.6}
+.frow.held .rowbg{stroke:var(--coral);stroke-width:1.6}
+.rowfill{opacity:.18}
+.step-hl{fill:var(--tint);stroke:var(--accent);stroke-width:.8;opacity:0;transition:opacity .15s}
+.step-hl.on{opacity:1}
+.chip-s .cb{fill:var(--node);stroke:var(--line);stroke-width:1.2;transition:stroke .2s}
+.chip-s:hover .cb,.chip-s:focus-visible .cb{stroke:var(--accent)}
+.chip-s.tick .cb{stroke:var(--accent);stroke-width:2}
+.chip-s.paused .cb{fill:var(--b-stop-bg);stroke:var(--coral);stroke-width:1.6}
+.chip-s.paused .st{fill:var(--b-stop-fg);font-weight:650}
+.cdbg{fill:var(--line)} .cdfill{fill:var(--accent)} .chip-s.paused .cdfill{fill:var(--coral)}
+.ring{fill:var(--line);transition:fill .1s} .ring.on{fill:var(--accent)}
+.fdot{stroke:var(--card-solid);stroke-width:1.5}
+.fd-info{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+@media (max-width:760px){.fd-info{grid-template-columns:1fr}}
+.fd-log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:.88rem;min-height:8.5em}
+.fd-log time{color:var(--mut);font-variant-numeric:tabular-nums;margin-right:8px}
 </style>
 </head>
 <body>
@@ -312,8 +353,11 @@ fun dispatchEverything() {
 <section id="loop">
   <h2><span class="hnum">2</span>Version 1: a schedule and a polite loop</h2>
   <div class="prose">
-    <p>Each event type gets its own Temporal Schedule. Every 30 seconds to 5 minutes, depending on the type, it starts a <code>DispatcherWorkflow</code>, and that workflow runs a single activity. The activity is the loop below, and this is Option 1.</p>
+    <p>Each event type gets its own Temporal Schedule. Every 30 seconds to 5 minutes, depending on the type, it starts a <code>DispatcherWorkflow</code>, and that workflow runs a single activity. This is Option 1.</p>
+    <p>Before we read any code, let's watch it run. In the picture below, payments arrive over HTTP on the left and wait in the table. Each schedule counts down to its next tick and wakes the dispatcher, which claims and starts. The business workflow on the right does the real work and marks the row done. Try pausing one schedule, say Inbound, and watch its payments pile up while the others keep moving.</p>
   </div>
+  <div class="card fd" id="fd1"></div>
+  <div class="prose"><p>Notice how the dots leave the dispatcher one by one, and how a payment that lands just after a tick has to wait for the next one. Inside the dispatcher box is the loop below.</p></div>
   <div class="code"><div class="code-head">PollingDispatchEngine.kt (trimmed)</div><pre><span class="c">// Version 1: claim only what we can afford, start one at a time</span>
 while (clock.instant().isBefore(deadline)) {
     val capacity = limits.maxInflight - store.countInflight(type)
@@ -341,6 +385,11 @@ while (clock.instant().isBefore(deadline)) {
   <h2><span class="hnum">3</span>Version 2: a doorbell and a Kotlin Flow</h2>
   <div class="prose">
     <p>Option 2 keeps everything we just built: the schedules, the claim, the cap and the token bucket. It adds two pieces, and both are plain Kotlin Flow from <code>kotlinx.coroutines</code>. No other reactive library is involved.</p>
+    <p>Here is the same picture with those two pieces in place. Keep an eye on the doorbell at the bottom: when inbound or returned payments land, it rings, and their dispatcher starts within moments instead of waiting for the tick. Press "Send 20 inbound payments" and compare the two diagrams. The dispatcher here starts them eight at a time. Pausing still works the same way, and the doorbell respects it.</p>
+  </div>
+  <div class="card fd" id="fd2"></div>
+  <div class="prose">
+    <p>Let's open up the two pieces, starting with the doorbell.</p>
     <h3>The doorbell</h3>
     <p>The first piece answers a simple question: how do we hear about new rows without polling for them? A small trigger on the table calls <code>pg_notify</code> with the event type whenever rows are inserted. The app listens on its own JDBC connection and turns the notifications into a Kotlin Flow.</p>
   </div>
@@ -515,36 +564,23 @@ flow {
       <li>the team wants the smallest surface to own and isn't comfortable with coroutines yet, or</li>
       <li>the source is Oracle only, so the doorbell can't be used.</li>
     </ul>
-    <p>Let's see how the PoC puts all of these pieces together.</p>
+    <p>Reading about it only goes so far. Let's run it.</p>
   </div>
 </section>
 
-<section id="design">
-  <h2><span class="hnum">6</span>The PoC, piece by piece</h2>
-  <div class="prose"><p>Pick an option and a scenario, then click any box. The left panel walks through what happens, step by step. The right panel explains the box you clicked, including each event type's sample payload.</p></div>
-  <div class="card dg">
-    <div class="bar-ctl">
-      <div><div class="lbl">Option</div><div class="seg" id="modeSeg"><button type="button" class="m1" data-m="opt1">1 · plain loop</button><button type="button" data-m="opt2">2 · Kotlin Flow</button></div></div>
-      <div style="min-width:0"><div class="lbl">Scenario</div><div class="scens" id="scens"></div></div>
-    </div>
-    <p class="hint">Scroll sideways to see the whole diagram.</p>
-    <div class="dg-scroll"><svg class="arch" id="arch" viewBox="0 0 1012 888" role="img" aria-label="PoC architecture: control plane, one pipeline per payment event type, and the Temporal platform"></svg></div>
-    <div class="dg-info"><div class="panel" id="steps"></div><div class="panel" id="detail"></div></div>
-  </div>
-  <div class="prose"><p>Reading about it only goes so far. Let's run it.</p></div>
-</section>
 
 <section id="poc">
-  <h2><span class="hnum">7</span>Run it on your laptop</h2>
+  <h2><span class="hnum">6</span>Run it on your laptop</h2>
   <div class="poc">
     <div class="card"><h3>What's in the repo</h3><ul>
       <li>A Quarkus and Kotlin app with Exposed on Postgres, Flyway migrations and the Temporal Java SDK.</li>
       <li>One generic <code>DispatcherWorkflow</code> and one Temporal Schedule per event type.</li>
       <li>Two dispatch engines, <code>PollingDispatchEngine</code> and <code>ReactiveDispatchEngine</code>, chosen with <code>DISPATCH_MODE</code>.</li>
       <li><code>Doorbell</code>: JDBC <code>LISTEN</code> as a cold Kotlin Flow, shared with <code>shareIn</code> and conflated per type.</li>
+      <li>An ingestion API, <code>POST /events/{type}</code>, that validates the payload and stores it as NEW.</li>
       <li>Five business workflows with realistic payloads, plus a sample-data generator.</li>
       <li>An admin API for stats, pause and resume, and live limits.</li>
-      <li>26 tests, including real Postgres through Quarkus Dev Services.</li></ul></div>
+      <li>30 tests, including real Postgres through Quarkus Dev Services.</li></ul></div>
     <div class="card"><h3>Commands</h3>
       <div class="code"><div class="code-head">terminal</div><pre><span class="c"># infra: Postgres ×2, Temporal, Temporal UI (localhost:8233)</span>
 docker compose up -d
@@ -552,6 +588,10 @@ docker compose up -d
 <span class="c"># option 1 (default) or option 2</span>
 ./gradlew quarkusDev
 DISPATCH_MODE=reactive ./gradlew quarkusDev
+
+<span class="c"># send one payment through the HTTP API</span>
+curl -X POST localhost:8080/events/INBOUND_PAYMENT -H 'Content-Type: application/json' \
+  -d "$(curl -s localhost:8080/events/sample/INBOUND_PAYMENT)"
 
 <span class="c"># the 9:02 burst, timed: first pickup / all started / all finished</span>
 python3 scripts/watch_stats.py --generate INBOUND_PAYMENT:5000
@@ -621,145 +661,191 @@ function score(){
 }
 score();
 
-/* ---------- architecture ---------- */
-const NS='http://www.w3.org/2000/svg',svg=$('arch');
+/* ---------- flow diagrams: one live, simplified picture per option ---------- */
+const NS='http://www.w3.org/2000/svg';
 function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e}
-function tx(p,x,y,c,s){const t=el('text',{x,y,class:c},p);t.textContent=s;return t}
-const defs=el('defs',{},svg);
-[['ah','var(--dg-wire)'],['ah-on','var(--accent)']].forEach(([id,c])=>{const m=el('marker',{id,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'},defs);el('path',{d:'M0,0 L10,5 L0,10 z',style:'fill:'+c},m)});
-[[12,130,'Control plane'],[176,550,'Pipelines · one row per event type'],[760,116,'Platform']].forEach(([y,h,l])=>{el('rect',{x:12,y,width:962,height:h,rx:14,class:'frame'},svg);tx(svg,28,y+20,'lane-t',l)});
-tx(svg,28,220,'col-t','Event type · payment_events (Exposed)');tx(svg,318,220,'col-t','Temporal Schedule → dispatcher run');tx(svg,738,220,'col-t','Workflow · own task queue');
+function tx(p,x,y,c,s,anchor){const t=el('text',{x,y,class:c},p);if(anchor)t.setAttribute('text-anchor',anchor);t.textContent=s;return t}
+const REDUCED=!!(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches);
+const FT=[
+ {k:'INBOUND_PAYMENT',s:'Inbound',wf:'InboundPaymentWorkflow',iv:6,lab:'every 1m',door:true,rate:.9,dur:2.6,col:'var(--blue)',steps:'screen → match account → credit → notify',
+  payload:'inboundId, rail, amount, currency, originator { name, accountNumber, bankBic }, beneficiaryAccountId, remittanceInfo, referenceNumber, receivedAt'},
+ {k:'PAYMENT_RETURNED',s:'Returned',wf:'ReturnedPaymentWorkflow',iv:6,lab:'every 1m',door:true,rate:.3,dur:2,col:'var(--coral)',steps:'reverse posting → fee or block → notify',
+  payload:'paymentId, originalTraceNumber, returnCode, returnReason, amount, currency, accountId, rail, returnedAt'},
+ {k:'PAYMENT_SCHEDULED',s:'Scheduled',wf:'ScheduledPaymentWorkflow',iv:6,lab:'every 1m',door:false,rate:.35,dur:3.6,col:'var(--violet)',steps:'validate → wait for the due date → funds check → submit',
+  payload:'paymentId, debtorAccountId, creditor { name, accountNumber, routingNumber }, amount, currency, rail, scheduledFor, frequency, memo, initiatedBy, idempotencyKey'},
+ {k:'PAYMENT_POSTED',s:'Posted',wf:'PostedPaymentWorkflow',iv:3,lab:'every 30s',door:false,rate:.8,dur:1.4,col:'var(--green)',steps:'ledger entry → available balance → notify',
+  payload:'paymentId, accountId, direction, amount, currency, postedAt, valueDate, channel, coreTransactionId'},
+ {k:'PAYMENT_SETTLED',s:'Settled',wf:'SettledPaymentWorkflow',iv:15,lab:'every 5m',door:false,rate:.18,dur:2,col:'var(--amber)',steps:'reconcile fee → release hold → close',
+  payload:'settlementId, paymentId, rail, clearingSystem, settlementDate, amount, fee, currency, batchId'}];
+const SEED_WAIT=[3,1,2,4,2],SEED_DONE=[12,3,5,18,4],BATCH=25,GAP=1.2;
+const rowTop=i=>110+i*34,rowC=i=>rowTop(i)+15;
+const chipXY=i=>[618+(i%3)*141,374+(i<3?0:1)*50];
 
-const ROWS=[
- {n:1,type:'INBOUND_PAYMENT',desc:'wire / ACH / RTP credit',p:1,door:true,iv:'1m',wf:'InboundPaymentWorkflow',tq:'inbound',st:'screen → match → credit',
-  payload:'inboundId, rail, amount, currency, originator { name, accountNumber, bankBic }, beneficiaryAccountId, remittanceInfo, referenceNumber, receivedAt',
-  wfSteps:['Sanctions screening on the originator','Match the beneficiary account','Credit the account (ledger posting)','Notify the customer','A screening hit stops the workflow and marks the row FAILED for review']},
- {n:2,type:'PAYMENT_RETURNED',desc:'ACH return R01, R02, R03 …',p:2,door:true,iv:'1m',wf:'ReturnedPaymentWorkflow',tq:'returned',st:'reverse → fee → notify',
-  payload:'paymentId, originalTraceNumber, returnCode, returnReason, amount, currency, accountId, rail, returnedAt',
-  wfSteps:['Load the original payment','Reverse its ledger posting','Charge a return fee for R01 / R09','Block ACH debits for R02 / R03 (account closed / not found)','Notify the customer']},
- {n:3,type:'PAYMENT_SCHEDULED',desc:'future-dated debit',p:1,door:false,iv:'1m',wf:'ScheduledPaymentWorkflow',tq:'scheduled',st:'wait for date → submit',
-  payload:'paymentId, debtorAccountId, creditor { name, accountNumber, routingNumber }, amount, currency, rail, scheduledFor, frequency, memo, initiatedBy, idempotencyKey',
-  wfSteps:['Validate the instruction','Sleep on a durable timer until scheduledFor','Check available funds','Submit to the payment rail','The row is only claimed 5 minutes before it is due, so far-future payments hold no in-flight slot']},
- {n:4,type:'PAYMENT_POSTED',desc:'core ledger posting',p:2,door:false,iv:'30s',wf:'PostedPaymentWorkflow',tq:'posted',st:'ledger → balance → notify',
-  payload:'paymentId, accountId, direction, amount, currency, postedAt, valueDate, channel, coreTransactionId',
-  wfSteps:['Write the posting to the ledger projection','Recalculate the available balance','Send a push notification','High volume: the table is rarely empty, so the doorbell adds nothing here']},
- {n:5,type:'PAYMENT_SETTLED',desc:'clearing confirmation',p:2,door:false,iv:'5m',wf:'SettledPaymentWorkflow',tq:'settled',st:'reconcile → release hold',
-  payload:'settlementId, paymentId, rail, clearingSystem, settlementDate, amount, fee, currency, batchId',
-  wfSteps:['Reconcile against the expected amount and fee','Release the funds hold','Close the payment','Arrives in clearing-file batches, so a 5-minute interval is enough']}];
-const Y0=232,STEP=98;ROWS.forEach((r,i)=>r.y=Y0+i*STEP);
-const NODES=[
- {id:'door',x:28,y:46,w:210,h:64,t:'Doorbell',s:'LISTEN → Kotlin Flow',ph:'blue'},
- {id:'ops',x:318,y:46,w:164,h:64,t:'Ops controls',s:'UI · CLI · REST',ph:'violet'},
- {id:'cfg',x:494,y:46,w:164,h:64,t:'dispatch_config',s:'limits per type',ph:'violet'},
- {id:'gov',x:738,y:46,w:220,h:64,t:'Load governor',s:'future · runs every 30s',ph:'violet',dashed:true},
- {id:'wrk',x:28,y:794,w:210,h:64,t:'Quarkus workers',s:'one task queue per type',ph:'slate'},
- {id:'tmp',x:318,y:794,w:340,h:64,t:'Temporal Server',s:'frontend · history · matching',ph:'slate'},
- {id:'aur',x:738,y:794,w:220,h:64,t:'Temporal DB (Aurora)',s:'persistence · Postgres in the PoC',ph:'slate'}];
-ROWS.forEach(r=>{
-  NODES.push({id:'src'+r.n,x:28,y:r.y,w:210,h:80,band:'priority '+r.p,t:r.type,s:r.desc,ph:'green',row:r});
-  NODES.push({id:'dsp'+r.n,x:318,y:r.y,w:340,h:80,band:`Schedule · every ${r.iv} · skip overlap`,bandId:'sch'+r.n,t:'Dispatcher',s:'',ph:'blue',row:r});
-  NODES.push({id:'wf'+r.n,x:738,y:r.y,w:220,h:80,band:'task queue: '+r.tq,t:r.wf,s:r.st,ph:'amber',row:r})});
-const WIRES=[
- ['w-notify','M133,176 V110','NOTIFY',133,159],['w-trigger','M238,90 H298 V176','trigger',268,90],
- ['w-ops','M400,110 V176','pause · resume',400,159],['w-cfg','M576,110 V176','read every tick',576,159],
- ['w-gov-cfg','M738,78 H658','throttle',698,78],['w-gov-pipe','M848,110 V176','pause by priority',848,159],
- ['w-pipe-tmp','M488,726 V794','starts + history',488,743],['w-wrk-tmp','M238,826 H318','poll',278,826],
- ['w-tmp-aur','M658,826 H738','writes',698,826],['w-sig','M958,826 H992 V78 H958','load signals',992,452,true]];
-ROWS.forEach(r=>{const cy=r.y+53;WIRES.push(['w-src-'+r.n,`M238,${cy} H318`,'claim',278,cy]);WIRES.push(['w-wf-'+r.n,`M658,${cy} H738`,'start',698,cy])});
-const gW=el('g',{},svg),gL=el('g',{},svg),gN=el('g',{},svg),gB=el('g',{},svg);
-const wireEls={},labelEls={},nodeEls={},nodeById={},subEls={},bandEls={};
-WIRES.forEach(([id,d])=>wireEls[id]=el('path',{d,class:'wire'},gW));
-WIRES.forEach(([id,,lab,x,y,rot])=>{const g=el('g',{class:'wl'},gL);const t=tx(g,0,0,'',lab);const w=t.getComputedTextLength()+12;
-  el('rect',{x:-w/2,y:-8,width:w,height:16,rx:8},g);g.appendChild(t);t.setAttribute('x',-w/2+6);t.setAttribute('y',3.8);
-  g.setAttribute('transform',`translate(${x},${y})${rot?' rotate(-90)':''}`);labelEls[id]=g});
-NODES.forEach(n=>{nodeById[n.id]=n;
-  const g=el('g',{class:'node'+(n.dashed?' dashed':''),'data-id':n.id,tabindex:0,role:'button','aria-label':n.t+': show details'},gN);
-  el('rect',{x:n.x,y:n.y,width:n.w,height:n.h,rx:11,class:'nb'},g);
-  let dotY=n.y+22,tY=n.y+26.5,sY=n.y+47;
-  if(n.band){const x=n.x+.6,y=n.y+.6,w=n.w-1.2,h=25.4,r=10.4;
-    const p=el('path',{d:`M${x},${y+h} V${y+r} Q${x},${y} ${x+r},${y} H${x+w-r} Q${x+w},${y} ${x+w},${y+r} V${y+h} Z`,class:'band'},g);
-    if(n.bandId){p.setAttribute('data-id',n.bandId);p.setAttribute('tabindex',0);p.setAttribute('role','button');p.setAttribute('aria-label','Temporal Schedule: show details');p.style.cursor='pointer'}
-    el('line',{x1:n.x,x2:n.x+n.w,y1:n.y+26,y2:n.y+26,class:'bl'},g);
-    bandEls[n.id]=tx(g,n.x+14,n.y+17.5,'bt',n.band);const top=n.y+26;dotY=top+19;tY=top+23.5;sY=top+43}
-  el('circle',{cx:n.x+18,cy:dotY,r:4,style:`fill:var(--${n.ph})`},g);
-  const tt=tx(g,n.x+30,tY,'t',n.t);subEls[n.id]=tx(g,n.x+14,sY,'s',n.s);
-  if(tt.getComputedTextLength()>n.w-44)tt.style.fontSize='12.5px';
-  nodeEls[n.id]=g});
-function badge(id,text,kind){let n=nodeById[id];if(!n&&id.startsWith('sch'))n=nodeById['dsp'+id.slice(3)];if(!n)return;
-  const g=el('g',{class:'bdg '+kind},gB);const t=tx(g,0,0,'',text);const w=t.getComputedTextLength()+16;
-  const x=n.x+n.w-12-w,y=n.y-9;el('rect',{x,y,width:w,height:18,rx:9},g);g.appendChild(t);t.setAttribute('x',x+8);t.setAttribute('y',y+12.6)}
+function FlowDiagram(root,mode){
+  const o2=mode==='opt2',uid='fd-'+mode;
+  root.innerHTML=`
+    <div class="fd-top">
+      <div><div class="olabel">${o2?'Option 2':'Option 1'}</div><h3>${o2?'Temporal Schedules with Kotlin Flow':'Temporal Schedules with a plain loop'}</h3></div>
+      <div class="fd-ctrls">
+        <button type="button" data-act="burst">Send 20 inbound payments</button>
+        <button type="button" data-act="traffic" aria-pressed="true">Steady traffic</button>
+        <button type="button" data-act="reset">Reset</button>
+      </div>
+    </div>
+    <p class="fd-hint">Click a schedule to pause or resume it. Click any box for details. Time is compressed: a minute passes in six seconds.</p>
+    <div class="dg-scroll"><svg class="fdsvg" viewBox="0 0 1060 490" role="img" aria-label="${o2?'Option 2':'Option 1'} architecture: HTTP API, payment_events table, ${o2?'doorbell, ':''}Temporal Schedules, DispatcherWorkflow and business workflows"></svg></div>
+    <div class="fd-info"><div class="panel"><span class="kind">Live log</span><ul class="fd-log"></ul></div><div class="panel fd-sel"></div></div>`;
+  const svg=root.querySelector('svg'),logEl=root.querySelector('.fd-log'),selEl=root.querySelector('.fd-sel');
+  const defs=el('defs',{},svg),mk=el('marker',{id:uid+'-ah',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'},defs);
+  el('path',{d:'M0,0 L10,5 L0,10 z',style:'fill:var(--dg-wire)'},mk);
+  const gW=el('g',{},svg),gL=el('g',{},svg),gB=el('g',{},svg),gD=el('g',{},svg);
 
-let mode='opt2',cur='normal';
-const rowById=id=>{const m=id.match(/(\d)$/);return m&&/^(src|sch|dsp|wf)/.test(id)?ROWS[+m[1]-1]:null};
-function D(id){
-  const r=rowById(id),o2=mode==='opt2';
-  if(id==='door')return ['Option 2 only · Kotlin Flow','Doorbell',['A dedicated JDBC connection runs <code>LISTEN payment_events</code> inside a cold <code>flow { }</code>. A statement trigger sends the event type as the payload.','<code>retryWhen</code> reconnects after a drop, and <code>shareIn</code> lets that one connection feed every event type.','Each type runs <code>filter</code> then <code>conflate()</code>: the first ring triggers right away, and further rings fold into at most one trigger every 2 seconds.','It skips paused schedules, then calls <code>trigger(BUFFER_ONE)</code>, so a ring during a running dispatch queues exactly one follow-up run.','On for INBOUND_PAYMENT and PAYMENT_RETURNED only. If it stops, interval ticks still drain the table.'+(o2?'':' <b>Not used in Option 1.</b>')]];
-  if(id==='ops')return ['Control plane · manual','Ops controls',['Pause or resume one event type from the Temporal UI, <code>temporal schedule toggle</code>, or <code>POST /admin/schedules/{type}/pause</code>.','Every pause carries a note (who and why) that shows in the UI.','Pausing stops new dispatch only. Running workflows finish.']];
-  if(id==='cfg')return ['Control plane · runtime limits','dispatch_config table',['One row per event type: <code>batch_size</code>, <code>max_inflight</code>, <code>starts_per_second</code>, <code>parallelism</code>, <code>time_budget_seconds</code>, <code>enabled</code>.','The dispatcher reads it at the start of every run, so <code>PUT /admin/limits/{type}</code> applies without a redeploy.','The future governor throttles by writing here.']];
-  if(id==='gov')return ['Control plane · future','Load governor',['Runs on its own schedule every 30s and never pauses itself.','Inputs: Temporal persistence latency, schedule-to-start latency, Aurora CPU and commit latency.','Level 1 lowers the limits. Level 2 pauses the priority 2 schedules (returned, posted, settled) and keeps priority 1 (inbound, scheduled) running.','Waits for load to stay healthy for a set time before undoing anything (hysteresis), so it doesn\'t flip back and forth.']];
-  if(id==='wrk')return ['Platform · the PoC app','Quarkus workers',['One Quarkus app hosts the dispatcher worker and five business workers, each on its own task queue.','<code>WorkerOptions</code> cap concurrent activities per queue.','Safe to scale out: SKIP LOCKED and the workflow IDs prevent double processing.']];
-  if(id==='tmp')return ['Platform','Temporal Server',['Server-side rate limits as a safety net: <code>frontend.namespaceRPS</code>, <code>history.persistenceMaxQPS</code>.','Short namespace retention keeps the history tables small.','Each dispatcher run costs a few writes. The business workflows are the real load, and the dispatcher meters them.']];
-  if(id==='aur')return ['Platform','Temporal DB (Aurora in production)',['In the PoC it\'s a separate Postgres container, never shared with the events database.','<code>numHistoryShards</code> is fixed when the cluster is created, so size it up front.','Its CPU and commit latency feed the governor.']];
-  if(id.startsWith('src'))return ['Event type · '+(r.door&&o2?'doorbell on':'interval only'),r.type,['Payload: '+esc(r.payload),'Stored in <code>payment_events</code> (jsonb) with status NEW → CLAIMED → STARTED → DONE / FAILED.','Claimed in one Exposed transaction: <code>FOR UPDATE SKIP LOCKED</code> plus a lease, filtered by <code>event_type</code> and <code>available_at ≤ now()</code>.']];
-  if(id.startsWith('sch'))return ['Temporal','Schedule dispatch-'+r.type,['Runs every '+r.iv+'. Overlap SKIP, so one event type never has two dispatchers.','catchupWindow ≈ one interval, so an outage doesn\'t replay missed ticks.','Created at startup by <code>ScheduleSyncer</code> from <code>application.yaml</code>.',o2&&r.door?'The doorbell can also trigger it between ticks.':'Only interval ticks start it'+(o2?' (doorbell off for this type).':'.')]];
-  if(id.startsWith('dsp'))return o2?['Temporal · generic workflow','DispatcherWorkflow ('+r.type+')',['<code>ReactiveDispatchEngine</code>: a cold Flow claims a batch only when the start stage has room.','<code>flatMapMerge(parallelism)</code> keeps up to n start calls in flight, with a suspending token bucket for starts per second.','Each start marks its row STARTED. Workflow ID <code>'+r.type+'-{eventId}</code> rejects duplicates.','Stops when no rows remain, the in-flight cap is reached or the time budget runs out. Heartbeats while running.']]
-    :['Temporal · generic workflow','DispatcherWorkflow ('+r.type+')',['<code>PollingDispatchEngine</code>: a plain loop of claim batch → start each workflow → mark STARTED.','Starts are sequential, with a blocking token bucket for starts per second.','Workflow ID <code>'+r.type+'-{eventId}</code> rejects duplicates.','Stops when no rows remain, the in-flight cap is reached or the time budget runs out. Heartbeats while running.']];
-  if(id.startsWith('wf'))return ['Workflow · task queue '+r.tq,r.wf,r.wfSteps];
-  return ['','',[]];
+  // ---- wires (data flows left to right along the top row; control comes from below) ----
+  const W={post:[[126,150],[166,150]],insert:[[316,150],[386,150]],claim:[[566,130],[636,130]],started:[[636,250],[566,250]],
+           start:[[816,180],[886,180]],done:[[965,72],[965,42],[476,42],[476,72]],run:[[726,340],[726,290]]};
+  const LB={post:['POST',146,150],insert:['INSERT',351,150],claim:['claim',601,130],started:['STARTED',601,250],start:['start',851,180],done:['mark DONE / FAILED',720,42],run:['start run',726,316]};
+  if(o2){W.notify=[[476,290],[476,350]];W.trigger=[[536,386],[606,386]];LB.notify=['NOTIFY',476,320];LB.trigger=['trigger',571,386]}
+  for(const k in W)el('path',{d:'M'+W[k].map(p=>p.join(',')).join(' L'),class:'wire',style:`marker-end:url(#${uid}-ah)`},gW);
+  for(const k in LB){const [s,x,y]=LB[k],g=el('g',{class:'wl'},gL),t=tx(g,0,0,'',s),w=t.getComputedTextLength()+12;
+    el('rect',{x:-w/2,y:-8,width:w,height:16,rx:8},g);g.appendChild(t);t.setAttribute('x',-w/2+6);t.setAttribute('y',3.8);g.setAttribute('transform',`translate(${x},${y})`)}
+
+  // ---- boxes ----
+  const boxes={};
+  function box(id,x,y,w,h,title){
+    const g=el('g',{class:'fbox','data-id':id,tabindex:0,role:'button','aria-label':title+': details'},gB);
+    el('rect',{x,y,width:w,height:h,rx:11,class:'nb'},g);
+    const r=10.4,bx=x+.6,by=y+.6,bw=w-1.2,bh=25.4;
+    el('path',{d:`M${bx},${by+bh} V${by+r} Q${bx},${by} ${bx+r},${by} H${bx+bw-r} Q${bx+bw},${by} ${bx+bw},${by+r} V${by+bh} Z`,class:'band'},g);
+    el('line',{x1:x,x2:x+w,y1:y+26,y2:y+26,class:'bl'},g);
+    tx(g,x+12,y+17.5,'bt',title);boxes[id]=g;return g}
+  const clock=tx(svg,16,40,'clk','09:02:00');tx(svg,16,58,'s','Monday morning');
+  let g=box('cli',16,120,110,60,'Client');tx(g,26,152,'s','app · partner');tx(g,26,167,'s','clearing file');
+  g=box('api',166,100,150,100,'HTTP API');tx(g,178,146,'t','POST /events/{type}');tx(g,178,165,'s','validate payload');tx(g,178,182,'s','store as NEW');
+  g=box('tab',386,72,180,218,'payment_events');tx(g,554,89.5,'s2','Postgres','end');
+  const rowEls=FT.map((t,i)=>{const rg=el('g',{class:'frow','data-id':'row'+i,tabindex:0,role:'button','aria-label':t.s+' events: details'},gB);
+    el('rect',{x:394,y:rowTop(i),width:164,height:30,rx:7,class:'rowbg'},rg);
+    const fill=el('rect',{x:394,y:rowTop(i),width:0,height:30,rx:7,class:'rowfill',style:`fill:${t.col}`},rg);
+    el('circle',{cx:405,cy:rowC(i),r:4,style:`fill:${t.col}`},rg);tx(rg,415,rowC(i)+4,'t',t.s);
+    const n=tx(rg,550,rowC(i)+4,'s','','end');return {rg,fill,n}});
+  g=box('dsp',636,72,180,218,'DispatcherWorkflow');
+  const STEPS=['1 · read limits','2 · check capacity','3 · claim (SKIP LOCKED)',o2?'4 · start 8 in parallel':'4 · start one at a time','5 · mark STARTED'];
+  const stepEls=STEPS.map((s,i)=>{const y=114+i*30;const hl=el('rect',{x:644,y:y-15,width:164,height:22,rx:6,class:'step-hl'},g);tx(g,652,y,'t',s);return hl});
+  const status=tx(g,652,276,'s','idle');
+  g=box('wf',886,72,158,218,'Business workflows');
+  const wfEls=FT.map((t,i)=>{const rg=el('g',{},g);el('rect',{x:894,y:rowTop(i),width:142,height:30,rx:7,class:'rowbg'},rg);
+    el('circle',{cx:905,cy:rowTop(i)+11,r:4,style:`fill:${t.col}`},rg);tx(rg,915,rowTop(i)+15,'t',t.s);
+    return tx(rg,915,rowTop(i)+26,'s2','')});
+  g=box('sch',606,340,438,140,'Temporal Schedules');tx(g,1032,357.5,'s2','one per event type','end');
+  const chipEls=FT.map((t,i)=>{const [x,y]=chipXY(i);const cg=el('g',{class:'chip-s',tabindex:0,role:'button','data-chip':i,'aria-label':`Pause or resume the ${t.s} schedule`},gB);
+    el('rect',{x,y,width:132,height:40,rx:8,class:'cb'},cg);el('circle',{cx:x+11,cy:y+13,r:4,style:`fill:${t.col}`},cg);
+    tx(cg,x+20,y+17,'t',t.s);tx(cg,x+11,y+30,'s2',t.lab);const st=tx(cg,x+122,y+17,'s2 st','running','end');
+    el('rect',{x:x+11,y:y+34,width:110,height:3,rx:1.5,class:'cdbg'},cg);const bar=el('rect',{x:x+11,y:y+34,width:0,height:3,rx:1.5,class:'cdfill'},cg);
+    return {cg,st,bar}});
+  tx(gB,908,438,'s2','Click a schedule');tx(gB,908,452,'s2','to pause it.');
+  g=box('leg',16,350,330,130,'Event types');
+  FT.forEach((t,i)=>{const x=i<3?28:188,y=394+(i%3)*24;el('circle',{cx:x+4,cy:y-4,r:4.5,style:`fill:${t.col}`},g);tx(g,x+14,y,'s',t.s+(i===0||i===2?' · priority 1':' · priority 2'))});
+  let ringEl=null;
+  if(o2){g=box('door',396,350,140,72,'Doorbell');tx(g,408,394,'t','LISTEN → Flow');tx(g,408,411,'s','conflate() · 2 s gap');ringEl=el('circle',{cx:522,cy:363,r:5,class:'ring'},g)}
+
+  // ---- state ----
+  const S={wait:[],run:[],done:[],paused:[],cd:[],acc:[],lastTrig:[],pend:[]};
+  let runs=[],cur=null,traffic=true,simT=0,dots=[],retCool=0,sel='api';
+  function reset(){FT.forEach((t,i)=>{S.wait[i]=SEED_WAIT[i];S.run[i]=[];S.done[i]=SEED_DONE[i];S.paused[i]=false;S.cd[i]=t.iv*(.25+.15*i);S.acc[i]=0;S.lastTrig[i]=-99;S.pend[i]=false});
+    runs=[];cur=null;dots.forEach(d=>d.el.remove());dots=[];simT=0;logEl.innerHTML='';
+    log('Payments arrive over HTTP and wait as NEW until their dispatcher runs.');render();setStep(-1)}
+  function hhmmss(){const s=Math.floor(9*3600+120+simT*10);return [Math.floor(s/3600),Math.floor(s/60)%60,s%60].map(v=>String(v).padStart(2,'0')).join(':')}
+  function log(h){const li=document.createElement('li');li.innerHTML=`<time>${hhmmss()}</time>${h}`;logEl.prepend(li);while(logEl.children.length>5)logEl.lastChild.remove()}
+  function render(){
+    FT.forEach((t,i)=>{const w=S.wait[i];rowEls[i].n.textContent=w+' waiting';rowEls[i].fill.setAttribute('width',Math.min(1,w/30)*164);
+      rowEls[i].rg.classList.toggle('held',S.paused[i]&&w>0);
+      wfEls[i].textContent=`${S.run[i].length} running · ${S.done[i]} done`;
+      chipEls[i].cg.classList.toggle('paused',S.paused[i]);chipEls[i].st.textContent=S.paused[i]?'Paused':'running'});
+    clock.textContent=hhmmss()}
+  function setStep(k){stepEls.forEach((h,i)=>h.classList.toggle('on',i===k))}
+  function flash(elm,cls,ms){if(!elm)return;elm.classList.add(cls);setTimeout(()=>elm.classList.remove(cls),ms)}
+
+  // ---- dots (one dot = one payment) ----
+  function dot(pts,col,dur,done,delay,r){if(REDUCED){done&&done();return}
+    const c=el('circle',{r:r||5,cx:pts[0][0],cy:pts[0][1],class:'fdot',style:`fill:${col}`},gD);if(delay)c.style.opacity='0';
+    const segs=[];let L=0;for(let i=1;i<pts.length;i++){const d=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);segs.push([pts[i-1],pts[i],L,d]);L+=d}
+    dots.push({el:c,segs,L,t:-(delay||0),dur,done})}
+  function moveDots(dt){const fin=[];dots=dots.filter(d=>{d.t+=dt;if(d.t<0)return true;d.el.style.opacity='1';
+      const f=Math.min(1,d.t/d.dur),at=f*d.L,s=d.segs.find(s=>at<=s[2]+s[3])||d.segs[d.segs.length-1],k=s[3]?(at-s[2])/s[3]:1;
+      d.el.setAttribute('cx',s[0][0]+(s[1][0]-s[0][0])*k);d.el.setAttribute('cy',s[0][1]+(s[1][1]-s[0][1])*k);
+      if(f>=1){d.el.remove();fin.push(d.done);return false}return true});fin.forEach(f=>f&&f())}
+
+  // ---- behaviour ----
+  function arrive(i,delay){const t=FT[i];dot([[126,150],[386,150],[394,rowC(i)]],t.col,.8,()=>{S.wait[i]++;render();if(o2&&t.door)ring(i)},delay)}
+  function ring(i){flash(ringEl,'on',250);if(simT-S.lastTrig[i]<GAP){S.pend[i]=true;return}fire(i)}
+  function fire(i){S.lastTrig[i]=simT;S.pend[i]=false;const t=FT[i],[x,y]=chipXY(i);
+    if(S.paused[i]){log(`Doorbell: <b>${t.s}</b> rang, but its schedule is paused, so it skipped the trigger.`);return}
+    dot([[536,386],[606,386],[x+66,y+20]],'var(--accent)',.45,()=>{flash(chipEls[i].cg,'tick',300);enqueue(i,'doorbell')},0,4)}
+  function tick(i){flash(chipEls[i].cg,'tick',300);if(S.wait[i]>0)enqueue(i,'tick')}
+  function enqueue(i,why){if(runs.some(r=>r.i===i))return;if(S.wait[i]===0&&!(cur&&cur.i===i))return;
+    runs.push({i,why});dot([[726,340],[726,290]],'var(--accent)',.35,null,0,4)}
+  function stepRun(dt){
+    if(!cur){if(!runs.length){setStep(-1);status.textContent='idle';return}const r=runs.shift();cur={i:r.i,why:r.why,ph:0,t:0,n:0,left:0,gap:0}}
+    const t=FT[cur.i];cur.t+=dt;
+    if(cur.ph<2){setStep(cur.ph);status.textContent=`${t.s} · ${cur.ph?'checking capacity':'reading limits'}`;if(cur.t>=.25){cur.t=0;cur.ph++}return}
+    if(cur.ph===2){setStep(2);if(cur.n===0&&cur.t<=dt){const n=Math.min(S.wait[cur.i],BATCH);S.wait[cur.i]-=n;cur.n=n;cur.left=n;render();
+        for(let k=0;k<Math.min(n,4);k++)dot([[556,rowC(cur.i)],[566,130],[636,130]],t.col,.4,null,k*.07)}
+      status.textContent=`${t.s} · claimed ${cur.n}`;if(cur.t>=.55){cur.t=0;cur.ph=cur.n?3:4}return}
+    if(cur.ph===3){setStep(3);cur.gap-=dt;if(cur.gap<=0&&cur.left>0){const grp=o2?Math.min(8,cur.left):1,i=cur.i;
+        for(let k=0;k<grp;k++)dot([[816,180],[886,180],[894,rowTop(i)+15]],t.col,.45,()=>{S.run[i].push(simT+t.dur*(.8+.4*Math.random()));render()},k*.03);
+        cur.left-=grp;cur.gap=o2?.16:.11}
+      status.textContent=`${t.s} · started ${cur.n-cur.left} of ${cur.n}`;if(cur.left===0&&cur.gap<=0){cur.ph=4;cur.t=0;dot(W.started,'var(--accent)',.3,null,0,4)}return}
+    setStep(4);if(cur.t>=.3){if(cur.n)log(`<b>${t.s}</b> dispatcher (${cur.why==='doorbell'?'doorbell trigger':'schedule tick'}): claimed ${cur.n}, started ${cur.n} ${o2?'up to 8 at a time':'one at a time'}.`);cur=null}}
+  function step(dt){
+    simT+=dt;
+    if(traffic)FT.forEach((t,i)=>{S.acc[i]+=t.rate*dt;while(S.acc[i]>=1){S.acc[i]--;arrive(i)}});
+    FT.forEach((t,i)=>{if(!S.paused[i]){S.cd[i]-=dt;if(S.cd[i]<=0){S.cd[i]+=t.iv;tick(i)}}
+      chipEls[i].bar.setAttribute('width',Math.max(0,Math.min(1,1-S.cd[i]/t.iv))*110);
+      if(o2&&S.pend[i]&&simT-S.lastTrig[i]>=GAP)fire(i);
+      const before=S.run[i].length;S.run[i]=S.run[i].filter(e=>e>simT);const fin=before-S.run[i].length;
+      if(fin){S.done[i]+=fin;if(retCool<=0){dot(W.done,t.col,.7,null,0,4);retCool=.35}}});
+    retCool-=dt;stepRun(dt);moveDots(dt);render()}
+
+  // ---- details panel ----
+  function details(id){
+    if(id.startsWith('row')){const t=FT[+id.slice(3)];return ['Event type',t.k,[`Payload: <code>{ ${t.payload} }</code>`,
+      `Picked up ${t.lab}${o2&&t.door?', or within seconds when the doorbell rings':''}.`,`Runs <code>${t.wf}</code>: ${t.steps}.`]]}
+    const D={
+      cli:['Where payments come from','Client',['A mobile app, a partner API or a clearing-file loader.','Each payment becomes one HTTP call to the API.']],
+      api:['Quarkus REST','HTTP API',['<code>POST /events/{type}</code> takes one payment as JSON, for example <code>POST /events/INBOUND_PAYMENT</code>.','The body is checked against that type’s payload class. A bad body gets <code>400</code>.','One row is stored with status NEW, and the reply is <code>202 Accepted</code> with the new id.','Future-dated payments get <code>available_at = scheduledFor − 5 min</code>.']],
+      tab:['Postgres','payment_events',['One row per event: NEW → CLAIMED → STARTED → DONE or FAILED.','The table is the source of truth. Click a row to see that type’s payload.','Dispatchers claim rows with <code>FOR UPDATE SKIP LOCKED</code> and a lease, so two runs never take the same row.']],
+      dsp:['Temporal · one generic workflow','DispatcherWorkflow',[o2?'Started by a schedule tick or a doorbell trigger, for one event type.':'Started by a schedule tick, for one event type.',
+        '1 · read limits from <code>dispatch_config</code>.','2 · capacity = maxInflight − in-flight.','3 · claim up to that many rows with SKIP LOCKED and a lease.',
+        o2?'4 · start up to 8 workflows at once with <code>flatMapMerge(8)</code>. The next batch is claimed only when there is room.':'4 · start workflows one at a time, behind a token bucket.',
+        '5 · mark each row STARTED. The run ends when the table is empty, the cap is reached or its time budget runs out.']],
+      wf:['Temporal','Business workflows',['Each event type has its own workflow and task queue.',...FT.map(t=>`<b>${t.s}:</b> ${t.steps}.`),'The last step marks the row DONE or FAILED.']],
+      sch:['Temporal','Temporal Schedules',['One schedule per event type, each with its own interval. Overlap policy SKIP.','Click a schedule to pause it. Its payments wait as NEW, running workflows finish, and the other types keep flowing.',
+        o2?'In Option 2 the doorbell can also trigger a schedule between ticks, but never a paused one.':'In Option 1, only the interval starts a dispatcher run.']],
+      door:['Option 2 · Kotlin Flow','Doorbell',['A trigger on the table calls <code>pg_notify</code> with the event type.','The app runs <code>LISTEN</code> on its own JDBC connection inside a cold <code>flow { }</code>, shared with <code>shareIn</code>.','Per type: <code>filter</code>, then <code>conflate()</code>. A burst of rings becomes at most one trigger every 2 seconds.','It skips paused schedules, then calls <code>trigger(BUFFER_ONE)</code>. On for Inbound and Returned only.']],
+      leg:['Legend','Event types',['Each dot is one payment, colored by its event type.','Priority 1: Inbound and Scheduled. Priority 2: Returned, Posted and Settled.']]};
+    return D[id]}
+  function select(id){sel=id;svg.querySelectorAll('.sel').forEach(e=>e.classList.remove('sel'));
+    const target=id.startsWith('row')?rowEls[+id.slice(3)].rg:boxes[id];if(target)target.classList.add('sel');
+    const [k,t,items]=details(id);selEl.innerHTML=`<span class="kind">${k}</span><h3>${esc(t)}</h3><ul>${items.map(x=>`<li>${x}</li>`).join('')}</ul>`}
+  function togglePause(i){S.paused[i]=!S.paused[i];const t=FT[i];
+    log(S.paused[i]?`Schedule <b>dispatch-${t.k}</b> paused (note: INC-4711). ${t.s} payments will wait; the others keep flowing.`:`Schedule <b>dispatch-${t.k}</b> resumed. The next ${o2&&t.door?'ring or ':''}tick drains the backlog.`);render()}
+  svg.addEventListener('click',e=>{const c=e.target.closest('[data-chip]');if(c){togglePause(+c.getAttribute('data-chip'));return}
+    const b=e.target.closest('[data-id]');if(b)select(b.getAttribute('data-id'))});
+  svg.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const c=e.target.closest('[data-chip]'),b=e.target.closest('[data-id]');
+    if(c||b){e.preventDefault();if(c)togglePause(+c.getAttribute('data-chip'));else select(b.getAttribute('data-id'))}});
+  root.querySelector('.fd-ctrls').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const a=b.dataset.act;
+    if(a==='burst'){for(let k=0;k<20;k++)arrive(0,k*.05);log('20 inbound payments arrived via <code>POST /events/INBOUND_PAYMENT</code>.')}
+    if(a==='traffic'){traffic=!traffic;b.setAttribute('aria-pressed',traffic)}
+    if(a==='reset')reset()});
+
+  reset();select('api');
+  let last=performance.now(),visible=true;
+  if('IntersectionObserver' in window)new IntersectionObserver(es=>{visible=es[0].isIntersecting},{threshold:.05}).observe(svg);
+  function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;if(visible&&!document.hidden)step(dt);requestAnimationFrame(frame)}
+  requestAnimationFrame(frame);
 }
-const detailEl=$('detail');let selId='dsp1';
-function select(id){selId=id;
-  Object.values(nodeEls).forEach(g=>g.classList.remove('sel'));svg.querySelectorAll('.band.sel').forEach(b=>b.classList.remove('sel'));
-  if(id.startsWith('sch')){const b=svg.querySelector(`.band[data-id="${id}"]`);if(b)b.classList.add('sel')}else if(nodeEls[id])nodeEls[id].classList.add('sel');
-  const [k,t,items]=D(id);detailEl.innerHTML=`<span class="kind">${k}</span><h3>${esc(t)}</h3><ul>${items.map(i=>`<li>${i}</li>`).join('')}</ul>`}
-svg.addEventListener('click',e=>{const t=e.target.closest('[data-id]');if(t)select(t.getAttribute('data-id'))});
-svg.addEventListener('keydown',e=>{if(e.key!=='Enter'&&e.key!==' ')return;const t=e.target.closest('[data-id]');if(t){e.preventDefault();e.stopPropagation();select(t.getAttribute('data-id'))}});
+FlowDiagram(document.getElementById('fd1'),'opt1');
+FlowDiagram(document.getElementById('fd2'),'opt2');
 
-const ALL=Object.keys(nodeEls),rowW=ns=>ns.flatMap(n=>['w-src-'+n,'w-wf-'+n]),ROWALL=[1,2,3,4,5];
-const DOORW=['w-notify','w-trigger'];
-const SCEN={
- normal:{label:'Normal flow',detail:'dsp1',
-  opt1:{title:'Every tick, for each event type',focus:ALL.filter(i=>!['gov','door'].includes(i)),flow:rowW(ROWALL),off:DOORW,keep:true,badges:[['gov','future','info'],['door','not used','info']],
-   steps:['Each event type\'s schedule fires on its own interval (30s–5m) and starts <code>DispatcherWorkflow(eventType)</code>.','The dispatcher reads its limits from <code>dispatch_config</code>.','It claims at most <code>maxInflight − in-flight</code> rows with SKIP LOCKED and a lease.','It starts workflows one at a time, rate-limited, with ID <code>{type}-{eventId}</code>.','It marks rows STARTED and repeats until no rows remain, the cap is reached or the time budget runs out.','Each workflow marks its row DONE or FAILED.']},
-  opt2:{title:'A ring or a tick, for each event type',focus:ALL.filter(i=>i!=='gov'),flow:[...rowW(ROWALL),...DOORW],keep:true,badges:[['gov','future','info'],['door','2 types subscribed','ok']],
-   steps:['An insert fires <code>pg_notify</code> with the event type. The doorbell triggers on the first ring and at most once every 2s per type after that.','If the schedule isn\'t paused, the doorbell calls <code>trigger(BUFFER_ONE)</code>. Interval ticks still run as a safety net.','The dispatcher reads its limits and runs a Flow: claim batch → rate limit → <code>flatMapMerge(n)</code> start → mark STARTED.','A new batch is claimed only when the start stage has room.','Each workflow marks its row DONE or FAILED.']}},
- burst:{label:'Burst of 10,000',detail:'dsp1',
-  opt1:{title:'10,000 inbound payments land at once',focus:['src1','dsp1','wf1','cfg','tmp'],hl:['dsp1'],flow:rowW([1]),off:DOORW,badges:[['src1','10,000 NEW','info'],['dsp1','≈50 starts/s, one at a time','warn'],['wf1','in-flight ≤ 2,000','ok']],
-   steps:['The rows wait for the next tick, up to 1 minute.','The dispatcher claims 200 at a time, never more than <code>maxInflight − in-flight</code>.','Starts run one at a time. At 20 ms each that\'s about 50/s, so the burst takes about 3–4 minutes.','The in-flight cap stops claiming if workflows finish slower than they start.']},
-  opt2:{title:'10,000 inbound payments land at once',focus:['src1','dsp1','wf1','cfg','tmp','door'],hl:['dsp1','door'],flow:[...rowW([1]),...DOORW],badges:[['src1','10,000 NEW','info'],['door','many rings → 1 trigger / 2s','ok'],['dsp1','8 parallel · capped at 200/s','ok'],['wf1','in-flight ≤ 2,000','ok']],
-   steps:['The first insert rings the doorbell. Thousands of rings collapse into one trigger every 2s.','The dispatcher starts within seconds.','8 parallel starts at 20 ms could reach 400/s. The rate limit caps it at 200/s, so the burst takes about 50 seconds.','The Flow claims the next batch only when the start stage has room, so memory stays bounded.','The in-flight cap still limits open workflows.']}},
- slow:{label:'Temporal slows down',detail:'tmp',
-  opt1:{title:'Start latency rises from 20 ms to 200 ms',focus:['tmp','aur','dsp1','dsp4','gov','cfg'],warn:['tmp','aur'],on:['w-sig','w-gov-cfg'],flow:rowW([1,4]),off:DOORW,badges:[['tmp','start latency 200 ms','warn'],['dsp1','≈5 starts/s','warn'],['dsp4','≈5 starts/s','warn'],['gov','future','info']],
-   steps:['Each start call takes 10× longer, so the sequential loop slows to about 5 starts/s on its own.','That is backpressure, but the backlog grows fast for busy event types.','The future governor lowers limits, then pauses low-priority schedules.']},
-  opt2:{title:'Start latency rises from 20 ms to 200 ms',focus:['tmp','aur','dsp1','dsp4','gov','cfg'],warn:['tmp','aur'],on:['w-sig','w-gov-cfg'],flow:rowW([1,4]),off:[],badges:[['tmp','start latency 200 ms','warn'],['dsp1','8 in flight → ≈40/s','warn'],['dsp4','8 in flight → ≈40/s','warn'],['gov','future','info']],
-   steps:['Calls take longer and all 8 slots stay busy, so the Flow stops pulling rows. It settles at about 40 starts/s.','At most one batch is claimed but not yet started. Nothing piles up in memory.','Each dispatcher never sends a struggling server more than 8 calls at a time.','Pipeline backpressure only sees call latency, not Aurora CPU. The governor still uses the same levers as in Option 1.']}},
- pause:{label:'Pause & resume',detail:'sch1',
-  opt1:{title:'INBOUND_PAYMENT paused during an incident',focus:ALL.filter(i=>!['gov','door','cfg'].includes(i)),hl:['ops'],on:['w-ops'],off:[...rowW([1]),...DOORW],flow:rowW([2,3,4,5]),badges:[['sch1','Paused','stop'],['src1','rows wait as NEW','info'],['wf1','in-flight runs finish','ok']],
-   steps:['Pause <code>dispatch-INBOUND_PAYMENT</code> from the UI, the CLI or <code>/admin</code>, with a note.','No new dispatcher runs start, so rows stay NEW in the table.','Workflows already running finish. Other event types keep flowing.','On resume, the next tick drains the backlog at the configured rate.']},
-  opt2:{title:'INBOUND_PAYMENT paused during an incident',focus:ALL.filter(i=>!['gov','cfg'].includes(i)),hl:['ops','door'],on:['w-ops','w-notify'],off:rowW([1]),flow:[...rowW([2,3,4,5]),'w-trigger'],badges:[['sch1','Paused','stop'],['door','skips paused types','ok'],['src1','rows wait as NEW','info'],['wf1','in-flight runs finish','ok']],
-   steps:['Pause <code>dispatch-INBOUND_PAYMENT</code> with a note.','The doorbell still hears rings, but it checks the paused state before triggering, because a manual trigger may not respect a pause.','Workflows already running finish. Other event types keep flowing.','On resume, the next tick or ring drains the backlog at the configured rate.']}},
- future:{label:'Future-dated payment',detail:'wf3',
-  opt1:{title:'A payment scheduled for next Friday',focus:['src3','dsp3','wf3'],hl:['src3','wf3'],flow:rowW([3]),off:DOORW,badges:[['src3','claimable 5 min before due','info'],['wf3','durable timer until due','info']],
-   steps:['The row gets <code>available_at = scheduledFor − 5 min</code>.','The claim query takes only rows with <code>available_at ≤ now()</code>, so far-future payments don\'t hold in-flight slots.','When the row is claimed, the workflow sleeps on a durable timer until <code>scheduledFor</code>, checks funds and submits.']},
-  opt2:{title:'A payment scheduled for next Friday',focus:['src3','dsp3','wf3','door'],hl:['src3','wf3'],flow:rowW([3]),off:DOORW,badges:[['src3','claimable 5 min before due','info'],['door','off for this type','info'],['wf3','durable timer until due','info']],
-   steps:['The row gets <code>available_at = scheduledFor − 5 min</code>.','The doorbell is off for this type: a ring at insert time would find nothing due.','Interval ticks claim rows as they become due, then the workflow sleeps until <code>scheduledFor</code>, checks funds and submits.']}}};
-const scensEl=$('scens'),stepsEl=$('steps');
-Object.entries(SCEN).forEach(([k,s])=>{const b=document.createElement('button');b.type='button';b.className='scen';b.dataset.k=k;b.textContent=s.label;b.addEventListener('click',()=>{cur=k;apply(true)});scensEl.appendChild(b)});
-document.querySelectorAll('#modeSeg button').forEach(b=>b.addEventListener('click',()=>{mode=b.dataset.m;apply(false)}));
-function apply(reselect){
-  const s=SCEN[cur],c=s[mode];
-  scensEl.querySelectorAll('.scen').forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===cur));
-  document.querySelectorAll('#modeSeg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===mode));
-  ROWS.forEach(r=>{subEls['dsp'+r.n].textContent=mode==='opt2'?'claim → flatMapMerge(n) → start':'claim → start one at a time → mark';
-    bandEls['src'+r.n].textContent='priority '+r.p+(mode==='opt2'?(r.door?' · doorbell on':' · doorbell off'):'')});
-  ALL.forEach(id=>{const g=nodeEls[id];g.classList.toggle('dim',!!c.focus&&!c.focus.includes(id));g.classList.toggle('on',(c.hl||[]).includes(id));g.classList.toggle('warn',(c.warn||[]).includes(id))});
-  const on=c.on||[],flow=c.flow||[],off=c.off||[];
-  Object.keys(wireEls).forEach(id=>{const w=wireEls[id],l=labelEls[id];w.classList.remove('on','flow','off','dimw');l.classList.remove('dimw');
-    if(flow.includes(id))w.classList.add('flow');else if(on.includes(id))w.classList.add('on');else if(off.includes(id))w.classList.add('off');else if(!c.keep){w.classList.add('dimw');l.classList.add('dimw')}});
-  while(gB.firstChild)gB.removeChild(gB.firstChild);(c.badges||[]).forEach(b=>badge(...b));
-  stepsEl.innerHTML=`<span class="kind">What happens · ${mode==='opt2'?'Option 2':'Option 1'}</span><h3>${c.title}</h3><ol>${c.steps.map(x=>`<li>${x}</li>`).join('')}</ol>`;
-  select(reselect?s.detail:selId)}
-apply(true);
 })();
 </script>
 </body>

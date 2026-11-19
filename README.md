@@ -7,7 +7,7 @@ A proof of concept for turning payment events stored in Postgres into Temporal w
 | `polling` (default) | 1 · Temporal Schedules **without** reactive streams | One Temporal Schedule per event type starts a generic `DispatcherWorkflow`, whose activity claims rows and starts workflows one at a time. |
 | `reactive` | 2 · Temporal Schedules **with** reactive streams, built with Kotlin Flow | Same schedules and dispatcher. Adds a Postgres `NOTIFY` doorbell (JDBC `LISTEN` as a cold Kotlin Flow → `shareIn` → per-type `conflate()` → `schedule.trigger()`) and runs the claim-and-start loop as a Flow pipeline with bounded parallel starts. No Reactor, RxJava or Vert.x: only `kotlinx.coroutines`. |
 
-**Comparison page:** [`docs/index.html`](docs/index.html), published to GitHub Pages by `.github/workflows/pages.yml`. It walks through the naive loop, Option 1 and Option 2 with measured numbers, then covers backpressure, a throughput simulator, a weighted scorecard and an interactive diagram.
+**Comparison page:** <https://arunav-bhattacharya.github.io/temporal-dispatcher-poc/> (source: [`docs/index.html`](docs/index.html), deployed by `.github/workflows/pages.yml`). It walks through the naive loop, Option 1 and Option 2 with measured numbers, a live architecture diagram for each option (with per-schedule pause), backpressure, a throughput simulator and a weighted scorecard.
 
 **Stack:** Kotlin 2.4 · Quarkus 3.40 · Postgres 17 · Exposed 1.6 · Temporal Java SDK 1.41 · kotlinx.coroutines 1.11
 
@@ -15,6 +15,8 @@ A proof of concept for turning payment events stored in Postgres into Temporal w
 
 ```mermaid
 flowchart LR
+    CL[Client] -- "POST /events/{type}" --> API[HTTP API<br/>validate, store NEW]
+    API -- INSERT --> T
     subgraph PG[events Postgres]
         T[(payment_events)]
         C[(dispatch_config)]
@@ -33,7 +35,7 @@ flowchart LR
     W -- "DONE / FAILED" --> T
 ```
 
-1. **One row per event** in `payment_events`, with status `NEW → CLAIMED → STARTED → DONE | FAILED`. The table is the source of truth.
+1. **Events arrive over HTTP**: `POST /events/{type}` validates the JSON against the type's payload class (`400` if invalid) and stores one row in `payment_events` with status `NEW` (`202 Accepted`). The row moves `NEW → CLAIMED → STARTED → DONE | FAILED`, and the table is the source of truth.
 2. **One Temporal Schedule per event type** (`dispatch-<TYPE>`). Overlap policy is SKIP and the catch-up window is one interval. `ScheduleSyncer` creates or updates schedules at startup and keeps their paused state.
 3. **The dispatcher** reads limits from `dispatch_config`, claims at most `maxInflight − in-flight` rows with `SKIP LOCKED` and a lease, starts the business workflow (the workflow ID is derived from the event ID and duplicates are rejected), then marks the row `STARTED`. It stops when no rows remain or its time budget runs out. At the in-flight cap it waits for capacity inside the budget.
 4. **Business workflows** run on their own task queues and mark their own row `DONE` or `FAILED`. A business failure, such as a sanctions hit or insufficient funds, marks the row `FAILED` instead of being retried forever.
@@ -84,9 +86,11 @@ docker compose up -d                       # events Postgres, Temporal's own Pos
 DISPATCH_MODE=reactive ./gradlew quarkusDev   # option 2 (reactive)
 ```
 
-Load and observe:
+Send one payment, then load and observe:
 
 ```bash
+curl -X POST localhost:8080/events/INBOUND_PAYMENT -H 'Content-Type: application/json' \
+  -d "$(curl -s localhost:8080/events/sample/INBOUND_PAYMENT)"   # 202 {"id":…,"status":"NEW"}
 python3 scripts/watch_stats.py --generate INBOUND_PAYMENT:5000          # first pickup / all started / all finished
 curl -X POST 'localhost:8080/events/burst?count=5000'                     # spread across all five types
 curl localhost:8080/admin/stats
@@ -133,6 +137,7 @@ Parallel starts help when the start call is the bottleneck. When workflows thems
 - `PaymentWorkflowsTest`: workflow logic on Temporal's time-skipping test server, including a 3-day durable timer.
 - `PaymentEventRepositoryTest`: `SKIP LOCKED`, leases, `available_at` and JSONB against real Postgres via Quarkus Dev Services (needs Docker).
 - `PgNotificationsTest`: an insert fires the table trigger, and the doorbell's Kotlin Flow receives the event type.
+- `IngestionApiTest`: `POST /events/{type}` returns 202 and stores NEW, rejects bad payloads and unknown types with 400, and delays future-dated payments.
 
 ## Project layout
 
@@ -143,7 +148,7 @@ src/main/kotlin/com/payments/dispatch/
   dispatch/    DispatcherWorkflow, Polling/ReactiveDispatchEngine, TokenBucket, ScheduleSyncer, reaper
   doorbell/    pgNotifications (LISTEN as a cold Flow) and Doorbell (shareIn → conflate → schedule trigger)
   workflows/   five business workflows + activities
-  api/         /events (load generator) and /admin (stats, pause/resume, limits)
+  api/         /events (ingestion API, load generator, lookup) and /admin (stats, pause/resume, limits)
 src/main/resources/db/migration/V1__payment_events.sql   tables, partial indexes, NOTIFY trigger
 docs/index.html                                          comparison page (GitHub Pages)
 scripts/watch_stats.py                                   timing helper
@@ -151,8 +156,8 @@ scripts/watch_stats.py                                   timing helper
 
 ## Publishing
 
-- **Code:** create an empty GitHub repository, then `git remote add origin <url> && git push -u origin main`.
-- **Comparison page:** in Settings → Pages, set the source to **GitHub Actions**. The `pages` workflow then deploys `docs/` on every push that changes it. Alternatively, choose **Deploy from a branch → main → /docs**.
+- **Code:** <https://github.com/arunav-bhattacharya/temporal-dispatcher-poc>
+- **Comparison page:** <https://arunav-bhattacharya.github.io/temporal-dispatcher-poc/>. Pages is set to build from GitHub Actions, and the `pages` workflow redeploys `docs/` on every push that changes it.
 
 ## Notes and next steps
 

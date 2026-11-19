@@ -44,6 +44,7 @@ dependencies {
     implementation("io.github.oshai:kotlin-logging-jvm:$kotlinLoggingVersion")
 
     testImplementation("io.quarkus:quarkus-junit5")
+    testImplementation("io.rest-assured:rest-assured")
     testImplementation("io.temporal:temporal-testing:$temporalSdkVersion")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test")
 }

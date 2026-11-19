@@ -14,6 +14,7 @@ import org.jetbrains.exposed.v1.core.plus
 import org.jetbrains.exposed.v1.core.vendors.ForUpdateOption
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.batchInsert
+import org.jetbrains.exposed.v1.jdbc.insertAndGetId
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
@@ -27,6 +28,7 @@ data class StoredEvent(
     val id: Long,
     val type: EventType,
     val status: EventStatus,
+    val availableAt: Instant,
     val payloadJson: String,
     val workflowId: String?,
     val outcome: String?,
@@ -122,12 +124,25 @@ class PaymentEventRepository(private val db: Database) : EventStore {
                 id = it[PaymentEvents.id].value,
                 type = EventType.valueOf(it[PaymentEvents.eventType]),
                 status = EventStatus.valueOf(it[PaymentEvents.status]),
+                availableAt = it[PaymentEvents.availableAt],
                 payloadJson = it[PaymentEvents.payload],
                 workflowId = it[PaymentEvents.workflowId],
                 outcome = it[PaymentEvents.outcome],
                 lastError = it[PaymentEvents.lastError],
             )
         }
+    }
+
+    /** Stores one event as NEW and returns its id (the HTTP ingestion path). */
+    fun insertOne(event: NewEvent): Long = transaction(db) {
+        PaymentEvents.insertAndGetId {
+            it[eventType] = event.type.name
+            it[payload] = event.payloadJson
+            it[status] = EventStatus.NEW.name
+            it[availableAt] = event.availableAt
+            it[createdAt] = Instant.now()
+            it[attempts] = 0
+        }.value
     }
 
     fun insertAll(events: List<NewEvent>): Int = transaction(db) {

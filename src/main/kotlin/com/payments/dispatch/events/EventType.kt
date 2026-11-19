@@ -4,12 +4,12 @@ package com.payments.dispatch.events
  * The five payment event types and the workflow each one triggers.
  * Each type has its own Temporal Schedule, task queue and dispatch limits.
  */
-enum class EventType(val workflowType: String, val taskQueue: String) {
-    INBOUND_PAYMENT("InboundPaymentWorkflow", "inbound"),
-    PAYMENT_RETURNED("ReturnedPaymentWorkflow", "returned"),
-    PAYMENT_SCHEDULED("ScheduledPaymentWorkflow", "scheduled"),
-    PAYMENT_POSTED("PostedPaymentWorkflow", "posted"),
-    PAYMENT_SETTLED("SettledPaymentWorkflow", "settled");
+enum class EventType(val workflowType: String, val taskQueue: String, val payloadClass: Class<*>) {
+    INBOUND_PAYMENT("InboundPaymentWorkflow", "inbound", InboundPayment::class.java),
+    PAYMENT_RETURNED("ReturnedPaymentWorkflow", "returned", ReturnedPayment::class.java),
+    PAYMENT_SCHEDULED("ScheduledPaymentWorkflow", "scheduled", ScheduledPayment::class.java),
+    PAYMENT_POSTED("PostedPaymentWorkflow", "posted", PostedPayment::class.java),
+    PAYMENT_SETTLED("SettledPaymentWorkflow", "settled", SettledPayment::class.java);
 
     val scheduleId: String get() = "dispatch-$name"
 
