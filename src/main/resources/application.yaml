@@ -1,0 +1,113 @@
+# =============================================================================
+# Temporal Event Dispatcher — PoC configuration
+# =============================================================================
+dispatch:
+  # polling  = Option 1: Temporal Schedules without reactive streams
+  # reactive = Option 2: Temporal Schedules + Postgres NOTIFY doorbell + Kotlin Flow pipeline
+  mode: ${DISPATCH_MODE:polling}
+  task-queue: dispatcher
+
+  temporal:
+    target: ${TEMPORAL_TARGET:localhost:7233}
+    namespace: ${TEMPORAL_NAMESPACE:default}
+
+  schedules:
+    # Creates / updates one Temporal Schedule per event type at startup (keeps paused state).
+    auto-sync: ${SCHEDULES_AUTO_SYNC:true}
+
+  workers:
+    enabled: ${WORKERS_ENABLED:true}
+    max-concurrent-activities: 50
+    max-concurrent-workflow-tasks: 50
+
+  # Static registry: which event types exist and how often their dispatcher runs.
+  # Runtime limits (batch size, in-flight cap, starts/s, parallelism) live in the dispatch_config table.
+  events:
+    INBOUND_PAYMENT:
+      interval: 1m
+      doorbell: true
+      priority: 1
+    PAYMENT_RETURNED:
+      interval: 1m
+      doorbell: true
+      priority: 1
+    PAYMENT_SCHEDULED:
+      interval: 1m
+      doorbell: false
+      priority: 2
+    PAYMENT_POSTED:
+      interval: 30s
+      doorbell: false
+      priority: 2
+    PAYMENT_SETTLED:
+      interval: 5m
+      doorbell: false
+      priority: 3
+
+  # Option 2 only: LISTEN/NOTIFY wake-up signal.
+  doorbell:
+    channel: payment_events
+    min-gap: 2s          # at most one trigger per event type every 2s
+    pause-cache: 5s      # how long a schedule's paused state is cached
+    host: ${EVENTS_DB_HOST:localhost}
+    port: ${EVENTS_DB_PORT:5432}
+    database: ${EVENTS_DB_NAME:events}
+    user: ${EVENTS_DB_USER:events}
+    password: ${EVENTS_DB_PASSWORD:events}
+
+  reaper:
+    # STARTED rows older than this are checked against Temporal and repaired.
+    stale-after: 15m
+    batch: 50
+
+  simulation:
+    # Fake latency of each business activity (bank core, screening, rails).
+    activity-delay: 40ms
+    # Share of generated inbound payments whose originator is on the watchlist.
+    screening-hit-rate: 0.02
+    # Future-dated payments become claimable this long before they are due.
+    scheduled-lead: 5m
+
+quarkus:
+  application:
+    name: temporal-event-dispatcher
+  datasource:
+    db-kind: postgresql
+    jdbc:
+      max-size: 40
+  flyway:
+    migrate-at-start: true
+  log:
+    console:
+      format: "%d{HH:mm:ss.SSS} %-5p [%c{1.}] (%t) %s%e%n"
+    category:
+      "io.temporal":
+        level: WARN
+      "com.payments":
+        level: INFO
+
+"%dev":
+  quarkus:
+    datasource:
+      username: ${EVENTS_DB_USER:events}
+      password: ${EVENTS_DB_PASSWORD:events}
+      jdbc:
+        url: jdbc:postgresql://${EVENTS_DB_HOST:localhost}:${EVENTS_DB_PORT:5432}/${EVENTS_DB_NAME:events}
+      devservices:
+        enabled: false
+
+"%prod":
+  quarkus:
+    datasource:
+      username: ${EVENTS_DB_USER:events}
+      password: ${EVENTS_DB_PASSWORD:events}
+      jdbc:
+        url: jdbc:postgresql://${EVENTS_DB_HOST:localhost}:${EVENTS_DB_PORT:5432}/${EVENTS_DB_NAME:events}
+
+# Tests use Quarkus Dev Services (a throwaway Postgres container) and never talk to Temporal.
+"%test":
+  dispatch:
+    workers:
+      enabled: false
+    schedules:
+      auto-sync: false

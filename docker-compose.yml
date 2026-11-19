@@ -1,0 +1,58 @@
+# Local infrastructure for the PoC.
+#   events-db    : the payment_events table (the app's own database)
+#   temporal-db  : Temporal's persistence, standing in for Aurora Postgres; deliberately a separate database
+#   temporal     : Temporal server (auto-setup creates its schema in temporal-db)
+#   temporal-ui  : http://localhost:8233
+name: temporal-event-dispatcher
+
+services:
+  events-db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: events
+      POSTGRES_PASSWORD: events
+      POSTGRES_DB: events
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U events -d events"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  temporal-db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  temporal:
+    image: temporalio/auto-setup:1.29.7
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-db
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    image: temporalio/ui:2.58.1
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8233:8080"
